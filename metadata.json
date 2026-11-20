@@ -1,0 +1,6 @@
+{
+  "name": "Alpine Egypt Planning & FO Control Tower",
+  "description": "Production planning database, fabric order tracker, trigger date monitor, and downloadable Excel dashboard workbook for ALEX 1, ALEX 3, ALEX 5, and ALEX 12.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
