@@ -24,13 +24,16 @@ import type {
   FactoryName,
   MasterPlanMeta,
   PlanningRecord,
+  PlanningRuleOptions,
 } from '../shared/plannerTypes.ts';
 import { buildShortcutEmailDigest } from '../shared/reminderDigest.ts';
 import {
   EMAIL_REGEX,
   TIMEZONE_OPTIONS,
+  WEEKDAY_OPTIONS,
 } from '../shared/reminderTypes.ts';
 import type {
+  RecipientFrequency,
   ReminderAlertScope,
   ReminderRecipient,
   ReminderScheduleConfig,
@@ -44,6 +47,7 @@ interface EmailRemindersViewProps {
   records: PlanningRecord[];
   cuttingEntries: DailyCuttingEntry[];
   referenceDateIso: string;
+  ruleOptions?: PlanningRuleOptions;
   reminders: ReminderWorkspaceState;
   smtpStatus: SmtpSettingsPublic;
   appUrl: string;
@@ -59,12 +63,18 @@ interface EmailRemindersViewProps {
     fromEmail: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   onVerifySmtp: () => Promise<{ ok: boolean; message: string }>;
+  onSendTestEmail: (toEmail: string) => Promise<{ ok: boolean; message: string }>;
   onResetSmtp: () => Promise<void>;
   onAddRecipient: (payload: {
     name: string;
     email: string;
     role: string;
     factories: FactoryName[];
+    frequency: RecipientFrequency;
+    sendTime: string;
+    dayOfWeek: number;
+    dayOfMonth: number;
+    customNote: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   onUpdateRecipient: (
     id: string,
@@ -74,6 +84,11 @@ interface EmailRemindersViewProps {
       role: string;
       factories: FactoryName[];
       active: boolean;
+      frequency: RecipientFrequency;
+      sendTime: string;
+      dayOfWeek: number;
+      dayOfMonth: number;
+      customNote: string;
     }>
   ) => Promise<{ ok: boolean; error?: string }>;
   onDeleteRecipient: (id: string) => Promise<void>;
@@ -85,12 +100,14 @@ export function EmailRemindersView({
   records,
   cuttingEntries,
   referenceDateIso,
+  ruleOptions = {},
   reminders,
   smtpStatus,
   appUrl,
   onUpdateSchedule,
   onSaveSmtp,
   onVerifySmtp,
+  onSendTestEmail,
   onResetSmtp,
   onAddRecipient,
   onUpdateRecipient,
@@ -102,6 +119,13 @@ export function EmailRemindersView({
   const [emailInput, setEmailInput] = useState('');
   const [roleInput, setRoleInput] = useState('Merchandising & Planning');
   const [selectedFactories, setSelectedFactories] = useState<FactoryName[]>([]);
+  const [frequencyInput, setFrequencyInput] = useState<RecipientFrequency>('daily');
+  const [sendTimeInput, setSendTimeInput] = useState(
+    reminders.schedule.dailySendTime || '08:30'
+  );
+  const [dayOfWeekInput, setDayOfWeekInput] = useState<number>(1);
+  const [dayOfMonthInput, setDayOfMonthInput] = useState<number>(1);
+  const [customNoteInput, setCustomNoteInput] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -111,8 +135,22 @@ export function EmailRemindersView({
   const [editEmail, setEditEmail] = useState('');
   const [editRole, setEditRole] = useState('');
   const [editFactories, setEditFactories] = useState<FactoryName[]>([]);
+  const [editFrequency, setEditFrequency] = useState<RecipientFrequency>('daily');
+  const [editSendTime, setEditSendTime] = useState('08:30');
+  const [editDayOfWeek, setEditDayOfWeek] = useState(1);
+  const [editDayOfMonth, setEditDayOfMonth] = useState(1);
+  const [editCustomNote, setEditCustomNote] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Manual Custom Message Box State
+  const [customMsgDraft, setCustomMsgDraft] = useState(reminders.schedule.customMessage || '');
+  const [savingCustomMsg, setSavingCustomMsg] = useState(false);
+  const [customMsgSavedFlash, setCustomMsgSavedFlash] = useState(false);
+
+  useEffect(() => {
+    setCustomMsgDraft(reminders.schedule.customMessage || '');
+  }, [reminders.schedule.customMessage]);
 
   // Hosting / Sender SMTP Form State
   const [smtpOpen, setSmtpOpen] = useState(!smtpStatus.configured);
@@ -129,8 +167,12 @@ export function EmailRemindersView({
     smtpStatus.fromName || 'Alex Apparels Planning'
   );
   const [smtpFromEmail, setSmtpFromEmail] = useState(smtpStatus.fromEmail || '');
+  const [testTargetEmail, setTestTargetEmail] = useState(
+    smtpStatus.user || ''
+  );
   const [savingSmtp, setSavingSmtp] = useState(false);
   const [testingSmtp, setTestingSmtp] = useState(false);
+  const [sendingRealTest, setSendingRealTest] = useState(false);
   const [smtpFeedback, setSmtpFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Sync SMTP form defaults when server smtpStatus updates
@@ -142,7 +184,10 @@ export function EmailRemindersView({
     setSmtpUser(smtpStatus.user || '');
     setSmtpFromName(smtpStatus.fromName || 'Alex Apparels Planning');
     setSmtpFromEmail(smtpStatus.fromEmail || '');
-  }, [smtpStatus]);
+    if (smtpStatus.user && !testTargetEmail) {
+      setTestTargetEmail(smtpStatus.user);
+    }
+  }, [smtpStatus, testTargetEmail]);
 
   // Send & Copy States
   const [sendingNow, setSendingNow] = useState(false);
@@ -165,10 +210,23 @@ export function EmailRemindersView({
         cuttingEntries,
         referenceDateIso,
         alertScope: schedule.alertScope,
+        customMessage: customMsgDraft,
         appUrl: appUrl || (typeof window !== 'undefined' ? window.location.origin : ''),
+        ruleOptions,
       }),
-    [meta, records, cuttingEntries, referenceDateIso, schedule.alertScope, appUrl]
+    [
+      meta,
+      records,
+      cuttingEntries,
+      referenceDateIso,
+      schedule.alertScope,
+      customMsgDraft,
+      appUrl,
+      ruleOptions,
+    ]
   );
+
+  const foOffsetDays = Math.max(1, ruleOptions.upcomingFoOffsetDays ?? 15);
 
   const handlePresetChange = (preset: SmtpProviderPreset) => {
     setProviderPreset(preset);
@@ -230,6 +288,28 @@ export function EmailRemindersView({
     }
   };
 
+  const handleSendRealTestEmail = async () => {
+    setSmtpFeedback(null);
+    setSendingRealTest(true);
+    try {
+      const res = await onSendTestEmail(testTargetEmail.trim());
+      setSmtpFeedback({ ok: res.ok, text: res.message });
+    } finally {
+      setSendingRealTest(false);
+    }
+  };
+
+  const handleSaveCustomMessage = async () => {
+    setSavingCustomMsg(true);
+    try {
+      await onUpdateSchedule({ customMessage: customMsgDraft });
+      setCustomMsgSavedFlash(true);
+      setTimeout(() => setCustomMsgSavedFlash(false), 2500);
+    } finally {
+      setSavingCustomMsg(false);
+    }
+  };
+
   const toggleFactoryChoice = (factory: FactoryName) => {
     setSelectedFactories((prev) =>
       prev.includes(factory) ? prev.filter((f) => f !== factory) : [...prev, factory]
@@ -252,6 +332,11 @@ export function EmailRemindersView({
         email: trimmedEmail,
         role: roleInput.trim() || 'Merchandising & Planning',
         factories: selectedFactories,
+        frequency: frequencyInput,
+        sendTime: sendTimeInput || schedule.dailySendTime || '08:30',
+        dayOfWeek: dayOfWeekInput,
+        dayOfMonth: dayOfMonthInput,
+        customNote: customNoteInput.trim(),
       });
       if (!res.ok) {
         setFormError(res.error || 'Could not add email recipient.');
@@ -260,6 +345,7 @@ export function EmailRemindersView({
       setNameInput('');
       setEmailInput('');
       setSelectedFactories([]);
+      setCustomNoteInput('');
     } finally {
       setSubmitting(false);
     }
@@ -271,6 +357,11 @@ export function EmailRemindersView({
     setEditEmail(recip.email);
     setEditRole(recip.role);
     setEditFactories(recip.factories);
+    setEditFrequency(recip.frequency || 'daily');
+    setEditSendTime(recip.sendTime || schedule.dailySendTime || '08:30');
+    setEditDayOfWeek(recip.dayOfWeek ?? 1);
+    setEditDayOfMonth(recip.dayOfMonth ?? 1);
+    setEditCustomNote(recip.customNote || '');
     setEditError(null);
   };
 
@@ -295,6 +386,11 @@ export function EmailRemindersView({
         email: cleanEmail,
         role: editRole.trim() || 'Merchandising / Planning',
         factories: editFactories,
+        frequency: editFrequency,
+        sendTime: editSendTime || '08:30',
+        dayOfWeek: editDayOfWeek,
+        dayOfMonth: editDayOfMonth,
+        customNote: editCustomNote.trim(),
       });
       if (!res.ok) {
         setEditError(res.error || 'Failed to update recipient.');
@@ -432,6 +528,44 @@ export function EmailRemindersView({
             </div>
           </div>
 
+          {/* Manual Custom Message Box included with every email */}
+          <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-3.5 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label
+                htmlFor="custom-email-message"
+                className="text-xs font-bold text-slate-900"
+              >
+                Manual Email Message / Instruction Box (Sent with Email Summary)
+              </label>
+              <button
+                type="button"
+                disabled={savingCustomMsg}
+                onClick={handleSaveCustomMessage}
+                className="h-8 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {customMsgSavedFlash ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Saved to Email</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{savingCustomMsg ? 'Saving...' : 'Save Message'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <textarea
+              id="custom-email-message"
+              rows={3}
+              value={customMsgDraft}
+              onChange={(e) => setCustomMsgDraft(e.target.value)}
+              placeholder="Type any manual instructions, priority fabric remarks, or meeting notes to attach at the top of the email..."
+              className="w-full p-2.5 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
+          </div>
+
           {/* Hosting Email Sender Bar */}
           <div
             className={`rounded-lg border px-3.5 py-2.5 text-xs flex flex-wrap items-center justify-between gap-3 ${
@@ -444,12 +578,12 @@ export function EmailRemindersView({
               {smtpStatus.configured ? (
                 <span>
                   Sending from <span className="font-mono font-semibold">{smtpStatus.senderEmail}</span>{' '}
-                  via <span className="font-mono">{smtpStatus.host}:{smtpStatus.port}</span>. Daily emails run automatically at{' '}
-                  <span className="font-mono font-semibold">{schedule.dailySendTime}</span> ({schedule.timezone}).
+                  via <span className="font-mono">{smtpStatus.host}:{smtpStatus.port}</span>. Person-to-person Daily/Weekly/Monthly emails run in{' '}
+                  <span className="font-mono font-semibold">{schedule.timezone}</span>.
                 </span>
               ) : (
                 <span>
-                  Hosting / Sender Email is not configured yet. Set your hosting email, password, and SMTP host below to enable automatic daily sending.
+                  Hosting / Sender Email is not configured yet. Set your hosting email, password, and SMTP host below to enable automatic sending.
                 </span>
               )}
             </div>
@@ -458,7 +592,7 @@ export function EmailRemindersView({
               onClick={() => setSmtpOpen((prev) => !prev)}
               className="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-900 font-semibold whitespace-nowrap shrink-0 cursor-pointer"
             >
-              {smtpOpen ? 'Hide Hosting Email Box' : 'Change Hosting Email / Password'}
+              {smtpOpen ? 'Hide Hosting Email Box' : 'Change Hosting Email / Test Delivery'}
             </button>
           </div>
 
@@ -502,6 +636,11 @@ export function EmailRemindersView({
               <ExternalLink className="w-4 h-4 text-slate-500" />
               <span>Open in Mail App</span>
             </a>
+
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-semibold">
+              <Check className="w-3.5 h-3.5" />
+              <span>.xlsx Excel Workbook Attached Automatically</span>
+            </span>
 
             {schedule.lastSentDateLocal && (
               <span className="text-xs text-slate-500 ml-auto font-mono">
@@ -779,8 +918,36 @@ export function EmailRemindersView({
                 onClick={handleTestSmtp}
                 className="h-10 px-4 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50 text-slate-800 text-xs sm:text-sm font-medium transition-colors cursor-pointer"
               >
-                {testingSmtp ? 'Testing Connection...' : 'Test Connection'}
+                {testingSmtp ? 'Verifying Login...' : '1. Verify SMTP Login'}
               </button>
+            </div>
+
+            {/* Real Test Email Delivery Box */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-2">
+              <div className="text-xs font-semibold text-slate-900">
+                2. Send Real Test Email (Verify Actual Inbox Delivery)
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Note: &ldquo;Verify SMTP Login&rdquo; only checks server authentication and does not send a message. Use this button to send an actual test email and inspect Message-ID delivery. For Gmail SMTP, use a 16-digit Google App Password.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="email"
+                  value={testTargetEmail}
+                  onChange={(e) => setTestTargetEmail(e.target.value)}
+                  placeholder="Enter inbox email to test (e.g. planner@alexapparels.com)"
+                  className="flex-1 min-w-[230px] h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+                <button
+                  type="button"
+                  disabled={sendingRealTest || !smtpStatus.configured || !testTargetEmail.trim()}
+                  onClick={handleSendRealTestEmail}
+                  className="h-9 px-4 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{sendingRealTest ? 'Sending Test Email...' : 'Send Real Test Email'}</span>
+                </button>
+              </div>
             </div>
           </form>
         </section>
@@ -844,6 +1011,88 @@ export function EmailRemindersView({
               </div>
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <label htmlFor="recip-freq" className="text-xs font-medium text-slate-600">
+                  Schedule Frequency (Person-to-Person)
+                </label>
+                <select
+                  id="recip-freq"
+                  value={frequencyInput}
+                  onChange={(e) => setFrequencyInput(e.target.value as RecipientFrequency)}
+                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label htmlFor="recip-time" className="text-xs font-medium text-slate-600">
+                  Send Time ({schedule.timezone})
+                </label>
+                <input
+                  id="recip-time"
+                  type="time"
+                  value={sendTimeInput}
+                  onChange={(e) => setSendTimeInput(e.target.value || '08:30')}
+                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white font-mono text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
+            </div>
+
+            {frequencyInput === 'weekly' && (
+              <div className="flex flex-col gap-1">
+                <label htmlFor="recip-dow" className="text-xs font-medium text-slate-600">
+                  Weekly Send Day
+                </label>
+                <select
+                  id="recip-dow"
+                  value={dayOfWeekInput}
+                  onChange={(e) => setDayOfWeekInput(Number(e.target.value))}
+                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                >
+                  {WEEKDAY_OPTIONS.map((w) => (
+                    <option key={w.value} value={w.value}>
+                      Every {w.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {frequencyInput === 'monthly' && (
+              <div className="flex flex-col gap-1">
+                <label htmlFor="recip-dom" className="text-xs font-medium text-slate-600">
+                  Monthly Day of Month (1–31)
+                </label>
+                <input
+                  id="recip-dom"
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={dayOfMonthInput}
+                  onChange={(e) => setDayOfMonthInput(Math.min(31, Math.max(1, Number(e.target.value) || 1)))}
+                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white font-mono text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1">
+              <label htmlFor="recip-note" className="text-xs font-medium text-slate-600">
+                Personal Note for This Recipient (Optional)
+              </label>
+              <input
+                id="recip-note"
+                type="text"
+                value={customNoteInput}
+                onChange={(e) => setCustomNoteInput(e.target.value)}
+                placeholder="e.g. Please review ALEX 5 Line 51 urgent yarn booking"
+                className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+              />
+            </div>
+
             <div className="space-y-1.5">
               <span className="text-xs font-medium text-slate-600 block">
                 Factory Filter (leave all unchecked for All 4 Factories)
@@ -881,7 +1130,7 @@ export function EmailRemindersView({
               className="w-full h-10 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white text-xs sm:text-sm font-medium inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>{submitting ? 'Adding Email...' : 'Add Email to Daily Reminder List'}</span>
+              <span>{submitting ? 'Adding Email...' : 'Add Email to Reminder Schedule'}</span>
             </button>
           </form>
         </section>
@@ -890,10 +1139,10 @@ export function EmailRemindersView({
           <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between gap-3">
             <div>
               <h3 className="font-display text-sm font-bold text-slate-900">
-                Reminder Recipient List ({recipients.length})
+                Person-to-Person Reminder Directory ({recipients.length})
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Click the edit icon on any row to change a recipient email address or factory filter.
+                Each person can have Daily, Weekly, or Monthly schedule + factory filter + custom note.
               </p>
             </div>
           </div>
@@ -909,7 +1158,7 @@ export function EmailRemindersView({
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
                   <th className="py-2.5 px-3.5">Recipient</th>
-                  <th className="py-2.5 px-3.5">Role</th>
+                  <th className="py-2.5 px-3.5">Schedule (D/W/M)</th>
                   <th className="py-2.5 px-3.5">Factories</th>
                   <th className="py-2.5 px-3.5">Status</th>
                   <th className="py-2.5 px-3.5 text-right">Actions</th>
@@ -920,7 +1169,7 @@ export function EmailRemindersView({
                   <tr>
                     <td colSpan={5} className="py-10 px-4 text-center text-slate-500">
                       <Mail className="w-6 h-6 text-slate-300 mx-auto mb-2" />
-                      No email addresses added yet. Use the form on the left to add recipients for daily FO reminders.
+                      No email addresses added yet. Use the form on the left to add recipients with Daily, Weekly, or Monthly schedules.
                     </td>
                   </tr>
                 ) : (
@@ -929,7 +1178,7 @@ export function EmailRemindersView({
                     if (isEditing) {
                       return (
                         <tr key={recip.id} className="bg-blue-50/40">
-                          <td className="py-2.5 px-3.5 space-y-1.5">
+                          <td className="py-2.5 px-3.5 space-y-1.5 min-w-[190px]">
                             <input
                               type="text"
                               value={editName}
@@ -944,8 +1193,6 @@ export function EmailRemindersView({
                               placeholder="Email address"
                               className="w-full h-8 px-2 rounded border border-slate-300 bg-white font-mono text-xs text-slate-900"
                             />
-                          </td>
-                          <td className="py-2.5 px-3.5 align-top">
                             <input
                               type="text"
                               value={editRole}
@@ -953,6 +1200,55 @@ export function EmailRemindersView({
                               placeholder="Role"
                               className="w-full h-8 px-2 rounded border border-slate-300 bg-white text-xs text-slate-900"
                             />
+                            <input
+                              type="text"
+                              value={editCustomNote}
+                              onChange={(e) => setEditCustomNote(e.target.value)}
+                              placeholder="Personal email note (optional)"
+                              className="w-full h-8 px-2 rounded border border-slate-300 bg-white text-xs text-slate-900"
+                            />
+                          </td>
+                          <td className="py-2.5 px-3.5 align-top space-y-1.5 min-w-[165px]">
+                            <select
+                              value={editFrequency}
+                              onChange={(e) => setEditFrequency(e.target.value as RecipientFrequency)}
+                              className="w-full h-8 px-2 rounded border border-slate-300 bg-white text-xs font-medium text-slate-900"
+                            >
+                              <option value="daily">Daily</option>
+                              <option value="weekly">Weekly</option>
+                              <option value="monthly">Monthly</option>
+                            </select>
+                            <input
+                              type="time"
+                              value={editSendTime}
+                              onChange={(e) => setEditSendTime(e.target.value || '08:30')}
+                              className="w-full h-8 px-2 rounded border border-slate-300 bg-white font-mono text-xs text-slate-900"
+                            />
+                            {editFrequency === 'weekly' && (
+                              <select
+                                value={editDayOfWeek}
+                                onChange={(e) => setEditDayOfWeek(Number(e.target.value))}
+                                className="w-full h-8 px-2 rounded border border-slate-300 bg-white text-xs text-slate-900"
+                              >
+                                {WEEKDAY_OPTIONS.map((w) => (
+                                  <option key={w.value} value={w.value}>
+                                    {w.label}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            {editFrequency === 'monthly' && (
+                              <input
+                                type="number"
+                                min={1}
+                                max={31}
+                                value={editDayOfMonth}
+                                onChange={(e) =>
+                                  setEditDayOfMonth(Math.min(31, Math.max(1, Number(e.target.value) || 1)))
+                                }
+                                className="w-full h-8 px-2 rounded border border-slate-300 bg-white font-mono text-xs text-slate-900"
+                              />
+                            )}
                           </td>
                           <td className="py-2.5 px-3.5 align-top">
                             <div className="flex flex-wrap gap-1">
@@ -1001,13 +1297,35 @@ export function EmailRemindersView({
                       );
                     }
 
+                    const freqBadge =
+                      recip.frequency === 'weekly'
+                        ? `Weekly (${WEEKDAY_OPTIONS.find((w) => w.value === (recip.dayOfWeek ?? 1))?.short ?? 'Mon'}) @ ${recip.sendTime || '08:30'}`
+                        : recip.frequency === 'monthly'
+                          ? `Monthly (Day ${recip.dayOfMonth ?? 1}) @ ${recip.sendTime || '08:30'}`
+                          : `Daily @ ${recip.sendTime || '08:30'}`;
+
                     return (
                       <tr key={recip.id} className="hover:bg-slate-50">
                         <td className="py-2.5 px-3.5">
                           <div className="font-semibold text-slate-900">{recip.name}</div>
                           <div className="font-mono text-[11px] text-slate-600">{recip.email}</div>
+                          <div className="text-[11px] text-slate-400">{recip.role}</div>
+                          {recip.customNote && (
+                            <div className="text-[11px] text-blue-700 mt-0.5 truncate max-w-[200px]" title={recip.customNote}>
+                              Note: {recip.customNote}
+                            </div>
+                          )}
                         </td>
-                        <td className="py-2.5 px-3.5 text-slate-600">{recip.role}</td>
+                        <td className="py-2.5 px-3.5 whitespace-nowrap">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono text-[11px] font-semibold text-slate-800">
+                            {freqBadge}
+                          </span>
+                          {recip.lastSentDateLocal && (
+                            <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                              Last: {recip.lastSentDateLocal}
+                            </div>
+                          )}
+                        </td>
                         <td className="py-2.5 px-3.5 text-slate-700 font-mono text-[11px]">
                           {recip.factories.length === 0
                             ? 'All (ALEX 1,3,5,12)'
@@ -1089,6 +1407,15 @@ export function EmailRemindersView({
         </div>
 
         <div className="p-5 space-y-4">
+          {customMsgDraft.trim() && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-3 text-xs text-slate-800 space-y-1">
+              <div className="font-semibold text-blue-900">
+                Manual Note / Instruction Included in Email:
+              </div>
+              <div className="whitespace-pre-wrap leading-relaxed">{customMsgDraft.trim()}</div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {liveDigest.factoryDigest.map((f) => (
               <div
@@ -1124,7 +1451,7 @@ export function EmailRemindersView({
                   <th className="py-2 px-3">Running PG &amp; Style</th>
                   <th className="py-2 px-3">Next PG &amp; Upcoming Style</th>
                   <th className="py-2 px-3">Input Start</th>
-                  <th className="py-2 px-3">FO Trigger (In-20D)</th>
+                  <th className="py-2 px-3">FO Trigger (In-{foOffsetDays}D)</th>
                   <th className="py-2 px-3">Alert / Reason</th>
                 </tr>
               </thead>

@@ -3,8 +3,13 @@ import {
   ALLOWED_FACTORIES,
   FO_STATUS_OPTIONS,
   ORDER_STATUS_OPTIONS,
+  addDaysIso,
   buildLineShortcutSummaries,
+  buildPgFoChecklistItems,
+  computePgWiseQtySummary,
+  diffDaysIso,
   evaluatePlanningRecords,
+  getEffectiveIssueQty,
   isoToUtcDate,
 } from '../shared/plannerTypes.ts';
 import type {
@@ -13,6 +18,7 @@ import type {
   FactoryName,
   MasterPlanMeta,
   PlanningRecord,
+  PlanningRuleOptions,
 } from '../shared/plannerTypes.ts';
 
 const COLORS = {
@@ -79,15 +85,25 @@ export async function buildPlanningWorkbookBuffer(
   meta: MasterPlanMeta,
   records: PlanningRecord[],
   referenceDateIso: string,
-  cuttingEntries: DailyCuttingEntry[] = []
+  cuttingEntries: DailyCuttingEntry[] = [],
+  ruleOptions: PlanningRuleOptions = {}
 ): Promise<Buffer> {
+  const inputOffset = Math.max(1, ruleOptions.inputStartOffsetDays ?? 10);
+  const foOffset = Math.max(1, ruleOptions.upcomingFoOffsetDays ?? 15);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Alex Apparels — Cluster 1 Planning Control Tower';
   workbook.created = new Date();
   workbook.calcProperties.fullCalcOnLoad = true;
 
-  const evaluated = evaluatePlanningRecords(records, cuttingEntries, referenceDateIso);
-  const shortcutSummaries = buildLineShortcutSummaries(evaluated, referenceDateIso);
+  const evaluated = evaluatePlanningRecords(records, cuttingEntries, referenceDateIso, ruleOptions);
+  const shortcutSummaries = buildLineShortcutSummaries(evaluated, referenceDateIso, ruleOptions);
+  const pgChecklistItems = buildPgFoChecklistItems(
+    evaluated,
+    shortcutSummaries,
+    referenceDateIso,
+    ruleOptions
+  );
+  const pgQtySummary = computePgWiseQtySummary(pgChecklistItems);
 
   const uniqueLineMap = new Map<string, { factory: FactoryName; line: string; capacityMc: number }>();
   for (const r of records) {
@@ -458,8 +474,8 @@ export async function buildPlanningWorkbookBuffer(
     };
     row.getCell(8).numFmt = '#,##0';
 
-    // I: FO Issue Qty
-    row.getCell(9).value = rec.foIssueQty !== null ? rec.foIssueQty : null;
+    // I: FO Issue Qty (= Order Qty when not separately specified)
+    row.getCell(9).value = rec.effectiveIssueQty !== null ? rec.effectiveIssueQty : null;
     row.getCell(9).numFmt = '#,##0';
 
     // J: Cutting Finished Qty (Base + SUMIFS from Daily Cutting Log)
@@ -494,7 +510,7 @@ export async function buildPlanningWorkbookBuffer(
     // O, P, Q: FO Number, FO Date, FO Status
     row.getCell(15).value = rec.foNumber || null;
     row.getCell(16).value = rec.foDate || null;
-    row.getCell(17).value = rec.foStatus;
+    row.getCell(17).value = rec.isFullQtyReleased ? 'In-House' : rec.foStatus;
     row.getCell(17).dataValidation = {
       type: 'list',
       allowBlank: false,
@@ -508,22 +524,28 @@ export async function buildPlanningWorkbookBuffer(
     };
 
     // R: FO Required
-    row.getCell(18).value = {
-      formula: `IF(OR(U${rNum}="Order Closed",E${rNum}="Order Closed"),"NO",IF(OR(ISBLANK('Planning Database'!L${dbR}),Q${rNum}="Pending",Q${rNum}="Delayed"),"YES","NO"))`,
-      result: rec.foRequired ? 'YES' : 'NO',
-    };
+    row.getCell(18).value = rec.isFullQtyReleased
+      ? 'NO'
+      : {
+          formula: `IF(OR(U${rNum}="Order Closed",E${rNum}="Order Closed"),"NO",IF(OR(ISBLANK('Planning Database'!L${dbR}),Q${rNum}="Pending",Q${rNum}="Delayed"),"YES","NO"))`,
+          result: rec.foRequired ? 'YES' : 'NO',
+        };
 
     // S: Action Required
-    row.getCell(19).value = {
-      formula: `IF(OR(U${rNum}="Order Closed",E${rNum}="Order Closed"),"ORDER CLOSED",IF(ISBLANK('Planning Database'!L${dbR}),"FO NEED - TAKE ACTION AS PER PLAN",IF(AND(ISNUMBER(L${rNum}),L${rNum}<=10,Q${rNum}="Pending"),"CUTTING <= 10D — FABRIC ORDER NEEDED",IF(Q${rNum}="In-House","FABRIC IN-HOUSE - READY FOR LINE",IF(Q${rNum}="FO Raised",IF(N${rNum}<=TODAY(),"EXPEDITE RAISED FO - TRIGGER PASSED","FO RAISED - TRACK EX-MILL DELIVERY"),IF(Q${rNum}="Delayed","ESCALATE DELAYED FABRIC ORDER",IF(N${rNum}<=TODAY(),"URGENT - RAISE FO IMMEDIATELY",IF(N${rNum}<=TODAY()+14,"RAISE FABRIC ORDER BEFORE TRIGGER","SCHEDULE FABRIC ORDER PER TRIGGER"))))))))`,
-      result: rec.actionMessage,
-    };
+    row.getCell(19).value = rec.isFullQtyReleased
+      ? rec.actionMessage
+      : {
+          formula: `IF(OR(U${rNum}="Order Closed",E${rNum}="Order Closed"),"ORDER CLOSED",IF(ISBLANK('Planning Database'!L${dbR}),"FO NEED - TAKE ACTION AS PER PLAN",IF(AND(ISNUMBER(L${rNum}),L${rNum}<=10,Q${rNum}="Pending"),"CUTTING <= 10D — FABRIC ORDER NEEDED",IF(Q${rNum}="In-House","FABRIC IN-HOUSE - READY FOR LINE",IF(Q${rNum}="FO Raised",IF(N${rNum}<=TODAY(),"EXPEDITE RAISED FO - TRIGGER PASSED","FO RAISED - TRACK EX-MILL DELIVERY"),IF(Q${rNum}="Delayed","ESCALATE DELAYED FABRIC ORDER",IF(N${rNum}<=TODAY(),"URGENT - RAISE FO IMMEDIATELY",IF(N${rNum}<=TODAY()+14,"RAISE FABRIC ORDER BEFORE TRIGGER","SCHEDULE FABRIC ORDER PER TRIGGER"))))))))`,
+          result: rec.actionMessage,
+        };
 
     // T: Risk Status
-    row.getCell(20).value = {
-      formula: `IF(OR(U${rNum}="Order Closed",E${rNum}="Order Closed"),"ORDER CLOSED",IF(ISBLANK('Planning Database'!L${dbR}),"⚠ PLAN QTY PENDING",IF(AND(ISNUMBER(L${rNum}),L${rNum}<=10,Q${rNum}="Pending"),"CRITICAL - CUTTING <= 10D",IF(Q${rNum}="In-House","ON TRACK",IF(Q${rNum}="FO Raised",IF(N${rNum}<=TODAY(),"WATCH - TRIGGER PASSED","FO IN PROGRESS"),IF(Q${rNum}="Delayed","CRITICAL - FO DELAYED",IF(N${rNum}<=TODAY(),"CRITICAL - OVERDUE TRIGGER",IF(N${rNum}<=TODAY()+14,"HIGH RISK - DUE <= 14 DAYS","MONITORING - TRIGGER > 14D"))))))))`,
-      result: rec.riskStatus,
-    };
+    row.getCell(20).value = rec.isFullQtyReleased
+      ? 'FULL QTY RELEASED'
+      : {
+          formula: `IF(OR(U${rNum}="Order Closed",E${rNum}="Order Closed"),"ORDER CLOSED",IF(ISBLANK('Planning Database'!L${dbR}),"⚠ PLAN QTY PENDING",IF(AND(ISNUMBER(L${rNum}),L${rNum}<=10,Q${rNum}="Pending"),"CRITICAL - CUTTING <= 10D",IF(Q${rNum}="In-House","ON TRACK",IF(Q${rNum}="FO Raised",IF(N${rNum}<=TODAY(),"WATCH - TRIGGER PASSED","FO IN PROGRESS"),IF(Q${rNum}="Delayed","CRITICAL - FO DELAYED",IF(N${rNum}<=TODAY(),"CRITICAL - OVERDUE TRIGGER",IF(N${rNum}<=TODAY()+14,"HIGH RISK - DUE <= 14 DAYS","MONITORING - TRIGGER > 14D"))))))))`,
+          result: rec.riskStatus,
+        };
 
     for (let c = 1; c <= trackerHeaders.length; c++) {
       const cell = row.getCell(c);
@@ -815,23 +837,26 @@ export async function buildPlanningWorkbookBuffer(
   ];
 
   // =========================================================================
-  // 1. KPI DASHBOARD SHEET (with Shortcut Summary!)
+  // 1. KPI DASHBOARD SHEET (with PG-Wise FO & Output Start Summary!)
   // =========================================================================
   wsDashboard.columns = [
     { width: 3 },
     { width: 13 },
     { width: 14 },
-    { width: 13 },
-    { width: 30 },
     { width: 14 },
-    { width: 13 },
-    { width: 30 },
-    { width: 17 },
-    { width: 17 },
+    { width: 26 },
+    { width: 14 },
+    { width: 16 },
+    { width: 15 },
+    { width: 28 },
+    { width: 16 },
+    { width: 16 },
+    { width: 16 },
     { width: 24 },
+    { width: 26 },
   ];
 
-  wsDashboard.mergeCells('B2:K2');
+  wsDashboard.mergeCells('B2:N2');
   const titleCell = wsDashboard.getCell('B2');
   titleCell.value = 'ALEX APPARELS — CLUSTER 1 PLANNING & FABRIC ORDER KPI DASHBOARD';
   titleCell.font = { name: 'Calibri', size: 15, bold: true, color: { argb: COLORS.white } };
@@ -839,15 +864,15 @@ export async function buildPlanningWorkbookBuffer(
   titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
   wsDashboard.getRow(2).height = 34;
 
-  wsDashboard.mergeCells('B3:K3');
+  wsDashboard.mergeCells('B3:N3');
   const subCell = wsDashboard.getCell('B3');
-  subCell.value = `Master Plan As Of ${meta.asOfDateRaw}  |  Factories: ALEX 1, ALEX 3, ALEX 5, ALEX 12  |  Input Start: End Date - 10D  |  Upcoming FO Trigger: Input Start - 20D`;
+  subCell.value = `Master Plan As Of ${meta.asOfDateRaw}  |  Factories: ALEX 1, 3, 5, 12  |  Output Start: Running End + 1D  |  Input Start: End - ${inputOffset}D  |  FO Trigger: Input - ${foOffset}D  |  Total PG Issue Qty: ${pgQtySummary.totalPgIssueQty.toLocaleString()} pcs`;
   subCell.font = { name: 'Calibri', size: 10, color: { argb: COLORS.textMuted } };
   subCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.slateLight } };
   subCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
   wsDashboard.getRow(3).height = 22;
 
-  wsDashboard.mergeCells('B5:K5');
+  wsDashboard.mergeCells('B5:N5');
   wsDashboard.getCell('B5').value = 'INTERACTIVE FACTORY & LINE DROPDOWN FILTER';
   wsDashboard.getCell('B5').font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLORS.white } };
   wsDashboard.getCell('B5').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.indigoAccent } };
@@ -900,7 +925,12 @@ export async function buildPlanningWorkbookBuffer(
   const fCrit = `IF($C$6="All Factories","*",$C$6)`;
   const lCrit = `IF($E$6="All Lines","*",$E$6)`;
 
-  const filteredCards = [
+  const filteredCards: Array<{
+    col: number;
+    label: string;
+    formula?: string;
+    result: number;
+  }> = [
     {
       col: 2,
       label: 'Lines',
@@ -961,6 +991,16 @@ export async function buildPlanningWorkbookBuffer(
           r.daysToTrigger <= 14
       ).length,
     },
+    {
+      col: 10,
+      label: 'PG Issue Qty (=Order)',
+      result: pgQtySummary.totalPgIssueQty,
+    },
+    {
+      col: 11,
+      label: 'Full Qty Released (PG)',
+      result: pgQtySummary.releasedPgCount,
+    },
   ];
 
   wsDashboard.getRow(8).height = 20;
@@ -974,7 +1014,9 @@ export async function buildPlanningWorkbookBuffer(
     lblCell.border = THIN_BORDER;
 
     const valCell = wsDashboard.getRow(9).getCell(card.col);
-    valCell.value = { formula: card.formula, result: card.result };
+    valCell.value = card.formula
+      ? { formula: card.formula, result: card.result }
+      : card.result;
     valCell.numFmt = '#,##0';
     valCell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: COLORS.navyDark } };
     valCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.white } };
@@ -983,8 +1025,8 @@ export async function buildPlanningWorkbookBuffer(
   }
 
   // Factory-Wise Summary Table (Rows 11-17)
-  wsDashboard.mergeCells('B11:J11');
-  wsDashboard.getCell('B11').value = 'FACTORY-WISE CAPACITY & FABRIC ORDER KPI SUMMARY';
+  wsDashboard.mergeCells('B11:L11');
+  wsDashboard.getCell('B11').value = 'FACTORY-WISE CAPACITY, PG ISSUE QTY & FABRIC ORDER KPI SUMMARY';
   wsDashboard.getCell('B11').font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLORS.white } };
   wsDashboard.getCell('B11').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.navyHeader } };
   wsDashboard.getCell('B11').alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
@@ -1000,6 +1042,8 @@ export async function buildPlanningWorkbookBuffer(
     'Plan Qty Pending',
     'FO Required',
     'Triggers <= 14D',
+    'PG Issue Qty (=Order)',
+    'Full Qty Released (PG)',
   ];
   wsDashboard.getRow(12).height = 24;
   factoryHeaders.forEach((h, i) => {
@@ -1019,6 +1063,7 @@ export async function buildPlanningWorkbookBuffer(
     const facLines = uniqueLines.filter((u) => u.factory === fac);
     const facCap = facLines.reduce((acc, u) => acc + u.capacityMc, 0);
     const facRecs = evaluated.filter((r) => r.factory === fac);
+    const facPgStats = pgQtySummary.byFactory[fac];
 
     row.getCell(2).value = fac;
     row.getCell(3).value = {
@@ -1060,8 +1105,10 @@ export async function buildPlanningWorkbookBuffer(
           r.daysToTrigger <= 14
       ).length,
     };
+    row.getCell(11).value = facPgStats.issueQty;
+    row.getCell(12).value = facPgStats.releasedPgCount;
 
-    for (let c = 2; c <= 10; c++) {
+    for (let c = 2; c <= 12; c++) {
       const cell = row.getCell(c);
       cell.border = THIN_BORDER;
       cell.font = {
@@ -1079,12 +1126,12 @@ export async function buildPlanningWorkbookBuffer(
   const totalRow = wsDashboard.getRow(17);
   totalRow.height = 24;
   totalRow.getCell(2).value = 'CLUSTER 1 TOTAL';
-  for (let c = 3; c <= 10; c++) {
+  for (let c = 3; c <= 12; c++) {
     const colLetter = String.fromCharCode(64 + c);
     totalRow.getCell(c).value = { formula: `SUM(${colLetter}13:${colLetter}16)` };
     totalRow.getCell(c).numFmt = c === 5 ? '0.0%' : '#,##0';
   }
-  for (let c = 2; c <= 10; c++) {
+  for (let c = 2; c <= 12; c++) {
     const cell = totalRow.getCell(c);
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.slateLight } };
     cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLORS.navyDark } };
@@ -1092,10 +1139,10 @@ export async function buildPlanningWorkbookBuffer(
     cell.alignment = { vertical: 'middle', horizontal: c === 2 ? 'left' : 'right' };
   }
 
-  // SHORTCUT SUMMARY: IMMEDIATE UPCOMING FO & CUTTING <= 10D PER LINE (Rows 19+)
-  wsDashboard.mergeCells('B19:K19');
+  // PG-WISE FO NEED & RELEASE SUMMARY (Rows 19+)
+  wsDashboard.mergeCells('B19:N19');
   wsDashboard.getCell('B19').value =
-    'SHORTCUT SUMMARY — IMMEDIATE UPCOMING ORDER FO TRIGGER (INPUT START - 20D) & CUTTING <= 10D ALERTS';
+    `PG-WISE FO NEED CHECKLIST (RUNNING + UPCOMING) · OUTPUT START = END + 1D · INPUT = END - ${inputOffset}D · FO = INPUT - ${foOffset}D`;
   wsDashboard.getCell('B19').font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLORS.white } };
   wsDashboard.getCell('B19').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF991B1B' } };
   wsDashboard.getCell('B19').alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
@@ -1103,17 +1150,20 @@ export async function buildPlanningWorkbookBuffer(
 
   const snapHeaders = [
     'Factory',
-    'Line',
-    'Running PG #',
-    'Running Style',
+    'Order Stage',
+    'PG #',
+    'Lines',
     'Running End',
-    'Next PG #',
-    'Immediate Upcoming Style',
-    'Input Start (End-10D)',
-    'FO Trigger (In-20D)',
-    'Shortcut FO Status',
+    'Output Start (End+1D)',
+    'Days to Output',
+    'Style',
+    'Order Qty (Pcs)',
+    'Issue Qty (=Order)',
+    `FO Trigger (In-${foOffset}D)`,
+    'FO Checklist Status',
+    'Sheet Summary Remark',
   ];
-  wsDashboard.getRow(20).height = 24;
+  wsDashboard.getRow(20).height = 26;
   snapHeaders.forEach((h, i) => {
     const c = wsDashboard.getRow(20).getCell(i + 2);
     c.value = h;
@@ -1123,81 +1173,541 @@ export async function buildPlanningWorkbookBuffer(
     c.border = THIN_BORDER;
   });
 
-  const sortedShortcuts = [...shortcutSummaries].sort((a, b) => {
-    const sevOrder = { critical: 0, warning: 1, upcoming: 2, normal: 3 };
-    if (sevOrder[a.summarySeverity] !== sevOrder[b.summarySeverity]) {
-      return sevOrder[a.summarySeverity] - sevOrder[b.summarySeverity];
-    }
-    return (a.upcomingFoTriggerIso || '9999-12-31').localeCompare(
-      b.upcomingFoTriggerIso || '9999-12-31'
-    );
-  });
-
-  sortedShortcuts.forEach((s, idx) => {
+  pgChecklistItems.forEach((item, idx) => {
     const rNum = 21 + idx;
     const row = wsDashboard.getRow(rNum);
-    row.height = 21;
+    row.height = 22;
 
-    const runDbR = s.runningRecord ? dbRowById.get(s.runningRecord.id) : undefined;
-    const upDbR = s.upcomingRecord ? dbRowById.get(s.upcomingRecord.id) : undefined;
+    row.getCell(2).value = item.factory;
+    row.getCell(3).value = item.stageTag;
+    row.getCell(4).value = item.pgNumber;
+    row.getCell(5).value = item.lines.join(', ');
+    row.getCell(6).value = isoToUtcDate(item.runningEndIso) ?? '—';
+    if (item.runningEndIso) row.getCell(6).numFmt = 'dd-mmm-yy';
+    row.getCell(7).value = isoToUtcDate(item.newStyleOutputStartIso) ?? '—';
+    if (item.newStyleOutputStartIso) row.getCell(7).numFmt = 'dd-mmm-yy';
+    row.getCell(8).value =
+      item.daysToNewStyleOutputStart !== null ? item.daysToNewStyleOutputStart : '—';
+    if (item.daysToNewStyleOutputStart !== null) row.getCell(8).numFmt = '0';
+    row.getCell(9).value = item.style;
+    row.getCell(10).value = item.orderQty !== null ? item.orderQty : null;
+    if (item.orderQty !== null) row.getCell(10).numFmt = '#,##0';
+    row.getCell(11).value = item.issueQty !== null ? item.issueQty : null;
+    if (item.issueQty !== null) row.getCell(11).numFmt = '#,##0';
+    row.getCell(12).value = isoToUtcDate(item.foTriggerIso) ?? '—';
+    if (item.foTriggerIso) row.getCell(12).numFmt = 'dd-mmm-yy';
+    row.getCell(13).value = item.statusLabel;
+    row.getCell(14).value = item.isFullQtyReleased
+      ? item.sheetRemark
+        ? `FULL QTY RELEASED — ${item.sheetRemark}`
+        : 'FULL QTY RELEASED'
+      : item.sheetRemark || item.reasonLabel;
 
-    row.getCell(2).value = s.factory;
-    row.getCell(3).value = s.line;
-    row.getCell(4).value = s.runningRecord?.pgNumber ?? '—';
-    row.getCell(5).value = s.runningRecord?.style ?? 'No Running Style';
-    row.getCell(6).value = runDbR
-      ? {
-          formula: `'Planning Database'!M${runDbR}`,
-          result: isoToUtcDate(s.runningRecord?.endDateIso ?? null) ?? undefined,
-        }
-      : '—';
-    if (s.runningRecord?.endDateIso) row.getCell(6).numFmt = 'dd-mmm-yy';
-
-    row.getCell(7).value = s.upcomingRecord?.pgNumber ?? '—';
-    row.getCell(8).value = s.upcomingRecord?.style ?? 'No Upcoming Style';
-    row.getCell(9).value = runDbR
-      ? {
-          formula: `IF(ISNUMBER(F${rNum}),F${rNum}-10,"")`,
-          result: isoToUtcDate(s.newStyleInputStartIso) ?? undefined,
-        }
-      : '—';
-    if (s.newStyleInputStartIso) row.getCell(9).numFmt = 'dd-mmm-yy';
-
-    row.getCell(10).value = upDbR && runDbR
-      ? {
-          formula: `IF(ISNUMBER(I${rNum}),I${rNum}-20,"")`,
-          result: isoToUtcDate(s.upcomingFoTriggerIso) ?? undefined,
-        }
-      : '—';
-    if (s.upcomingFoTriggerIso) row.getCell(10).numFmt = 'dd-mmm-yy';
-
-    row.getCell(11).value = s.summaryStatus;
-
-    for (let c = 2; c <= 11; c++) {
+    for (let c = 2; c <= 14; c++) {
       const cell = row.getCell(c);
       cell.border = THIN_BORDER;
-      cell.font = { name: 'Calibri', size: 9.5, color: { argb: COLORS.textPrimary } };
+      cell.font = {
+        name: 'Calibri',
+        size: 9.5,
+        bold: c === 4 || c === 3,
+        color: { argb: COLORS.textPrimary },
+      };
       cell.alignment = {
         vertical: 'middle',
-        horizontal: [2, 3, 4, 6, 7, 9, 10].includes(c) ? 'center' : 'left',
+        horizontal: [2, 3, 4, 6, 7, 12].includes(c)
+          ? 'center'
+          : [8, 10, 11].includes(c)
+            ? 'right'
+            : 'left',
+        wrapText: c === 5 || c === 9 || c === 14,
       };
     }
 
-    if (s.summarySeverity === 'critical') {
-      row.getCell(11).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.redFill } };
-      row.getCell(11).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.redText } };
-    } else if (s.summarySeverity === 'warning') {
-      row.getCell(11).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.amberFill } };
-      row.getCell(11).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.amberText } };
-    } else if (s.summarySeverity === 'upcoming') {
-      row.getCell(11).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.blueFill } };
-      row.getCell(11).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.blueText } };
+    if (item.isFullQtyReleased || item.severity === 'released') {
+      row.getCell(13).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.greenFill } };
+      row.getCell(13).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.greenText } };
+    } else if (item.severity === 'critical') {
+      row.getCell(13).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.redFill } };
+      row.getCell(13).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.redText } };
+    } else if (item.severity === 'warning') {
+      row.getCell(13).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.amberFill } };
+      row.getCell(13).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.amberText } };
+    } else if (item.severity === 'upcoming') {
+      row.getCell(13).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.blueFill } };
+      row.getCell(13).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.blueText } };
     } else {
-      row.getCell(11).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.greenFill } };
-      row.getCell(11).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.greenText } };
+      row.getCell(13).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.greenFill } };
+      row.getCell(13).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.greenText } };
     }
   });
 
   const arrayBuffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(arrayBuffer);
 }
+
+export async function buildSelectedUpcomingFoWorkbookBuffer(params: {
+  meta: MasterPlanMeta;
+  records: PlanningRecord[];
+  cuttingEntries?: DailyCuttingEntry[];
+  referenceDateIso: string;
+  selectedRecordIds?: string[];
+  ruleOptions?: PlanningRuleOptions;
+}): Promise<Buffer> {
+  const {
+    meta,
+    records,
+    cuttingEntries = [],
+    referenceDateIso,
+    selectedRecordIds,
+    ruleOptions = {},
+  } = params;
+
+  const inputOffset = Math.max(1, ruleOptions.inputStartOffsetDays ?? 10);
+  const foOffset = Math.max(1, ruleOptions.upcomingFoOffsetDays ?? 15);
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Alex Apparels — Cluster 1 Planning Control Tower';
+  workbook.created = new Date();
+  workbook.calcProperties.fullCalcOnLoad = true;
+
+  const evaluated = evaluatePlanningRecords(records, cuttingEntries, referenceDateIso, ruleOptions);
+  const shortcutSummaries = buildLineShortcutSummaries(evaluated, referenceDateIso, ruleOptions);
+
+  const shortcutByTargetId = new Map<string, (typeof shortcutSummaries)[number]>();
+  const shortcutByLineKey = new Map<string, (typeof shortcutSummaries)[number]>();
+  for (const s of shortcutSummaries) {
+    shortcutByLineKey.set(`${s.factory}::${s.line}`, s);
+    if (s.upcomingRecord) {
+      shortcutByTargetId.set(s.upcomingRecord.id, s);
+    }
+    if (s.runningRecord && !shortcutByTargetId.has(s.runningRecord.id)) {
+      shortcutByTargetId.set(s.runningRecord.id, s);
+    }
+  }
+
+  const explicitSet =
+    Array.isArray(selectedRecordIds) && selectedRecordIds.length > 0
+      ? new Set(selectedRecordIds)
+      : null;
+
+  const selectedRecords = evaluated.filter((r) =>
+    explicitSet ? explicitSet.has(r.id) : Boolean(r.upcomingFoSelected)
+  );
+
+  interface SelectedExportRow {
+    rec: EvaluatedPlanningRecord;
+    orderStage: 'RUNNING ORDER' | 'UPCOMING ORDER';
+    runningPg: string;
+    runningStyle: string;
+    runningEndIso: string | null;
+    newStyleOutputStartIso: string | null;
+    daysToNewStyleOutputStart: number | null;
+    nextPg: string;
+    nextStyle: string;
+    orderQty: number | null;
+    issueQty: number | null;
+    inputStartIso: string | null;
+    daysToStartNewStyle: number | null;
+    foDateNeededIso: string | null;
+    daysToFo: number | null;
+    foStatus: string;
+    foNumber: string;
+    remarks: string;
+    isFullQtyReleased: boolean;
+    statusLabel: string;
+    reasonLabel: string;
+    severity: 'critical' | 'warning' | 'upcoming' | 'normal' | 'released';
+    savedAtIso: string | null;
+  }
+
+  const exportRows: SelectedExportRow[] = selectedRecords.map((rec) => {
+    const sc =
+      shortcutByTargetId.get(rec.id) ??
+      shortcutByLineKey.get(`${rec.factory}::${rec.line}`) ??
+      null;
+    const isLineUpcoming = sc?.upcomingRecord?.id === rec.id;
+    const isLineRunning = sc?.runningRecord?.id === rec.id || rec.lifecycleStage === 'Running';
+    const orderStage: 'RUNNING ORDER' | 'UPCOMING ORDER' = isLineRunning
+      ? 'RUNNING ORDER'
+      : 'UPCOMING ORDER';
+
+    const runningRec = isLineRunning ? rec : sc?.runningRecord ?? null;
+    const runningEndIso = isLineRunning
+      ? rec.endDateIso ?? null
+      : runningRec?.endDateIso ?? rec.endDateIso ?? null;
+    const newStyleOutputStartIso = addDaysIso(runningEndIso, 1);
+    const daysToNewStyleOutputStart = diffDaysIso(newStyleOutputStartIso, referenceDateIso);
+
+    const inputStartIso = isLineUpcoming
+      ? sc?.newStyleInputStartIso ?? null
+      : runningEndIso
+        ? addDaysIso(runningEndIso, -inputOffset)
+        : null;
+    const daysToStartNewStyle = isLineUpcoming
+      ? sc?.daysToNewStyleInputStart ?? null
+      : diffDaysIso(inputStartIso, referenceDateIso);
+    const foDateNeededIso = isLineUpcoming
+      ? sc?.upcomingFoTriggerIso ?? null
+      : inputStartIso
+        ? addDaysIso(inputStartIso, -foOffset)
+        : rec.triggerDateIso;
+    const daysToFo = isLineUpcoming
+      ? sc?.daysToUpcomingFoTrigger ?? null
+      : diffDaysIso(foDateNeededIso, referenceDateIso);
+
+    let statusLabel = rec.isFullQtyReleased
+      ? 'FULL QTY RELEASED'
+      : sc?.summaryStatus ?? (rec.foRequired ? 'FO REQUIRED NOW' : 'SAVED FO ITEM');
+    let reasonLabel = rec.isFullQtyReleased
+      ? rec.sheetRemark || 'Full Qty Released'
+      : sc?.foNeedReason ?? rec.actionMessage;
+    let severity: SelectedExportRow['severity'] = rec.isFullQtyReleased
+      ? 'released'
+      : sc?.summarySeverity ??
+        (rec.riskTier === 'critical'
+          ? 'critical'
+          : rec.riskTier === 'high'
+            ? 'warning'
+            : rec.riskTier === 'monitoring'
+              ? 'upcoming'
+              : 'normal');
+
+    if (!rec.isFullQtyReleased && !isLineUpcoming && !isLineRunning) {
+      statusLabel = rec.riskStatus;
+      reasonLabel = rec.actionMessage;
+      severity =
+        rec.riskTier === 'critical'
+          ? 'critical'
+          : rec.riskTier === 'high' || rec.riskTier === 'plan_qty_pending'
+            ? 'warning'
+            : rec.riskTier === 'monitoring'
+              ? 'upcoming'
+              : 'normal';
+    }
+
+    const issueQty = getEffectiveIssueQty(rec);
+    const combinedRemark = rec.isFullQtyReleased
+      ? rec.sheetRemark
+        ? `FULL QTY RELEASED — ${rec.sheetRemark}`
+        : 'FULL QTY RELEASED'
+      : rec.sheetRemark || rec.fabricNote || '';
+
+    return {
+      rec,
+      orderStage,
+      runningPg: runningRec?.pgNumber ?? '—',
+      runningStyle: runningRec?.style ?? '—',
+      runningEndIso,
+      newStyleOutputStartIso,
+      daysToNewStyleOutputStart,
+      nextPg: rec.pgNumber || '—',
+      nextStyle: rec.style,
+      orderQty: rec.plannedQty,
+      issueQty,
+      inputStartIso,
+      daysToStartNewStyle,
+      foDateNeededIso,
+      daysToFo,
+      foStatus: rec.isFullQtyReleased ? 'In-House' : rec.foStatus,
+      foNumber: rec.foNumber || '',
+      remarks: combinedRemark,
+      isFullQtyReleased: rec.isFullQtyReleased,
+      statusLabel,
+      reasonLabel,
+      severity,
+      savedAtIso: rec.upcomingFoSelectedAtIso ? rec.upcomingFoSelectedAtIso.slice(0, 10) : null,
+    };
+  });
+
+  exportRows.sort((a, b) => {
+    const sevOrder = { critical: 0, warning: 1, upcoming: 2, normal: 3, released: 4 };
+    if (sevOrder[a.severity] !== sevOrder[b.severity]) {
+      return sevOrder[a.severity] - sevOrder[b.severity];
+    }
+    return (a.foDateNeededIso || '9999-12-31').localeCompare(
+      b.foDateNeededIso || '9999-12-31'
+    );
+  });
+
+  const wsMain = workbook.addWorksheet('Selected Upcoming FO', {
+    views: [{ state: 'frozen', ySplit: 4 }],
+    properties: { tabColor: { argb: 'FF0F766E' } },
+  });
+
+  wsMain.mergeCells('A1:W1');
+  const tCell = wsMain.getCell('A1');
+  tCell.value = 'ALEX APPARELS — SELECTED FO NEEDED CHECKLIST (RUNNING + UPCOMING)';
+  tCell.font = { name: 'Calibri', size: 14, bold: true, color: { argb: COLORS.white } };
+  tCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.navyDark } };
+  tCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  wsMain.getRow(1).height = 30;
+
+  wsMain.mergeCells('A2:W2');
+  const sCell = wsMain.getCell('A2');
+  sCell.value = `Master Plan As Of ${meta.asOfDateRaw}  |  Ref Date: ${referenceDateIso}  |  Selected: ${exportRows.length}  |  Output Start = End + 1D  |  Input Start = End - ${inputOffset}D  |  FO Trigger = Input - ${foOffset}D`;
+  sCell.font = { name: 'Calibri', size: 10, color: { argb: COLORS.textMuted } };
+  sCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.slateLight } };
+  sCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  wsMain.getRow(2).height = 22;
+
+  wsMain.getRow(3).height = 8;
+
+  const headers = [
+    'SL',
+    'Factory',
+    'Line',
+    'Order Stage',
+    'M/c Cap',
+    'Running PG #',
+    'Running Style',
+    'Running End Date',
+    'Output Start (End+1D)',
+    'Days to Output Start',
+    'PG # (FO Needed)',
+    'Style / Description',
+    'Order Qty (Pcs)',
+    'Issue Qty (=Order)',
+    `Input Start (End-${inputOffset}D)`,
+    'Days to Input Start',
+    `FO Date Needed (In-${foOffset}D)`,
+    'Days to FO',
+    'FO Status',
+    'FO #',
+    'Summary Remark / Full Qty Released',
+    'Status & Reason',
+    'Saved Date',
+  ];
+
+  const headerRow = wsMain.getRow(4);
+  headerRow.values = headers;
+  styleHeaderRow(headerRow, headers.length, COLORS.navyDark);
+
+  exportRows.forEach((item, idx) => {
+    const rNum = 5 + idx;
+    const row = wsMain.getRow(rNum);
+    row.height = 24;
+
+    row.getCell(1).value = idx + 1;
+    row.getCell(2).value = item.rec.factory;
+    row.getCell(3).value = item.rec.line;
+    row.getCell(4).value = item.orderStage;
+    row.getCell(5).value = item.rec.capacityMc;
+    row.getCell(5).numFmt = '#,##0';
+    row.getCell(6).value = item.runningPg;
+    row.getCell(7).value = item.runningStyle;
+    row.getCell(8).value = isoToUtcDate(item.runningEndIso) ?? '—';
+    if (item.runningEndIso) row.getCell(8).numFmt = 'dd-mmm-yy';
+    row.getCell(9).value = isoToUtcDate(item.newStyleOutputStartIso) ?? '—';
+    if (item.newStyleOutputStartIso) row.getCell(9).numFmt = 'dd-mmm-yy';
+    row.getCell(10).value =
+      item.daysToNewStyleOutputStart !== null ? item.daysToNewStyleOutputStart : '—';
+    if (item.daysToNewStyleOutputStart !== null) row.getCell(10).numFmt = '0';
+    row.getCell(11).value = item.nextPg;
+    row.getCell(12).value = item.nextStyle;
+    row.getCell(13).value = item.orderQty !== null ? item.orderQty : null;
+    if (item.orderQty !== null) row.getCell(13).numFmt = '#,##0';
+    row.getCell(14).value = item.issueQty !== null ? item.issueQty : null;
+    if (item.issueQty !== null) row.getCell(14).numFmt = '#,##0';
+    row.getCell(15).value = isoToUtcDate(item.inputStartIso) ?? '—';
+    if (item.inputStartIso) row.getCell(15).numFmt = 'dd-mmm-yy';
+    row.getCell(16).value = item.daysToStartNewStyle !== null ? item.daysToStartNewStyle : '—';
+    if (item.daysToStartNewStyle !== null) row.getCell(16).numFmt = '0';
+    row.getCell(17).value = isoToUtcDate(item.foDateNeededIso) ?? '—';
+    if (item.foDateNeededIso) row.getCell(17).numFmt = 'dd-mmm-yy';
+    row.getCell(18).value = item.daysToFo !== null ? item.daysToFo : '—';
+    if (item.daysToFo !== null) row.getCell(18).numFmt = '0';
+    row.getCell(19).value = item.foStatus;
+    row.getCell(20).value = item.foNumber || '—';
+    row.getCell(21).value = item.remarks || '—';
+    row.getCell(22).value = `${item.statusLabel} — ${item.reasonLabel}`;
+    row.getCell(23).value = isoToUtcDate(item.savedAtIso) ?? '—';
+    if (item.savedAtIso) row.getCell(23).numFmt = 'dd-mmm-yy';
+
+    for (let c = 1; c <= headers.length; c++) {
+      const cell = row.getCell(c);
+      cell.border = THIN_BORDER;
+      cell.font = {
+        name: 'Calibri',
+        size: 10,
+        bold: c === 11 || c === 2 || c === 4,
+        color: { argb: COLORS.textPrimary },
+      };
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal: [1, 2, 3, 4, 6, 8, 9, 11, 15, 17, 19, 23].includes(c)
+          ? 'center'
+          : [5, 10, 13, 14, 16, 18].includes(c)
+            ? 'right'
+            : 'left',
+        wrapText: c === 7 || c === 12 || c === 21 || c === 22,
+      };
+    }
+
+    if (item.severity === 'released') {
+      row.getCell(22).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.greenFill } };
+      row.getCell(22).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.greenText } };
+    } else if (item.severity === 'critical') {
+      row.getCell(22).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.redFill } };
+      row.getCell(22).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.redText } };
+    } else if (item.severity === 'warning') {
+      row.getCell(22).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.amberFill } };
+      row.getCell(22).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.amberText } };
+    } else if (item.severity === 'upcoming') {
+      row.getCell(22).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.blueFill } };
+      row.getCell(22).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.blueText } };
+    } else {
+      row.getCell(22).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.greenFill } };
+      row.getCell(22).font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: COLORS.greenText } };
+    }
+  });
+
+  const dataLastRow = Math.max(4, 4 + exportRows.length);
+  wsMain.autoFilter = {
+    from: { row: 4, column: 1 },
+    to: { row: dataLastRow, column: headers.length },
+  };
+
+  const totRowNum = dataLastRow + 1;
+  const totRow = wsMain.getRow(totRowNum);
+  totRow.height = 25;
+  totRow.getCell(1).value = 'TOTAL';
+  totRow.getCell(2).value = `${exportRows.length} Items`;
+  totRow.getCell(13).value =
+    exportRows.length > 0
+      ? {
+          formula: `SUM(M5:M${dataLastRow})`,
+          result: exportRows.reduce((s, r) => s + (r.orderQty ?? 0), 0),
+        }
+      : 0;
+  totRow.getCell(13).numFmt = '#,##0';
+  totRow.getCell(14).value =
+    exportRows.length > 0
+      ? {
+          formula: `SUM(N5:N${dataLastRow})`,
+          result: exportRows.reduce((s, r) => s + (r.issueQty ?? 0), 0),
+        }
+      : 0;
+  totRow.getCell(14).numFmt = '#,##0';
+  for (let c = 1; c <= headers.length; c++) {
+    const cell = totRow.getCell(c);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.slateLight } };
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLORS.navyDark } };
+    cell.border = THIN_BORDER;
+    cell.alignment = {
+      vertical: 'middle',
+      horizontal: c === 13 || c === 14 ? 'right' : c <= 2 ? 'center' : 'left',
+    };
+  }
+
+  wsMain.columns = [
+    { width: 6 },
+    { width: 11 },
+    { width: 13 },
+    { width: 16 },
+    { width: 10 },
+    { width: 14 },
+    { width: 28 },
+    { width: 15 },
+    { width: 16 },
+    { width: 15 },
+    { width: 16 },
+    { width: 32 },
+    { width: 15 },
+    { width: 15 },
+    { width: 16 },
+    { width: 16 },
+    { width: 17 },
+    { width: 11 },
+    { width: 13 },
+    { width: 14 },
+    { width: 28 },
+    { width: 36 },
+    { width: 13 },
+  ];
+
+  // Sheet 2: Factory Summary of Selected Items
+  const wsFac = workbook.addWorksheet('Factory Summary', {
+    views: [{ showGridLines: true }],
+    properties: { tabColor: { argb: COLORS.indigoAccent } },
+  });
+  wsFac.mergeCells('A1:E1');
+  wsFac.getCell('A1').value = 'SELECTED FO NEEDED — FACTORY SUMMARY';
+  wsFac.getCell('A1').font = { name: 'Calibri', size: 12, bold: true, color: { argb: COLORS.white } };
+  wsFac.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.navyDark } };
+  wsFac.getCell('A1').alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  wsFac.getRow(1).height = 26;
+
+  const facHeaders = [
+    'Factory',
+    'Selected Items',
+    'Total Order Qty (Pcs)',
+    'Total Issue Qty (=Order)',
+    'Full Qty Released / Critical',
+  ];
+  wsFac.getRow(3).values = facHeaders;
+  styleHeaderRow(wsFac.getRow(3), 5, COLORS.navyHeader);
+
+  ALLOWED_FACTORIES.forEach((fac, idx) => {
+    const rNum = 4 + idx;
+    const facItems = exportRows.filter((i) => i.rec.factory === fac);
+    const row = wsFac.getRow(rNum);
+    row.height = 22;
+    row.getCell(1).value = fac;
+    row.getCell(2).value = exportRows.length > 0
+      ? { formula: `COUNTIF('Selected Upcoming FO'!$B$5:$B$${dataLastRow},A${rNum})`, result: facItems.length }
+      : 0;
+    row.getCell(2).numFmt = '#,##0';
+    row.getCell(3).value = exportRows.length > 0
+      ? {
+          formula: `SUMIF('Selected Upcoming FO'!$B$5:$B$${dataLastRow},A${rNum},'Selected Upcoming FO'!$M$5:$M$${dataLastRow})`,
+          result: facItems.reduce((s, i) => s + (i.orderQty ?? 0), 0),
+        }
+      : 0;
+    row.getCell(3).numFmt = '#,##0';
+    row.getCell(4).value = exportRows.length > 0
+      ? {
+          formula: `SUMIF('Selected Upcoming FO'!$B$5:$B$${dataLastRow},A${rNum},'Selected Upcoming FO'!$N$5:$N$${dataLastRow})`,
+          result: facItems.reduce((s, i) => s + (i.issueQty ?? 0), 0),
+        }
+      : 0;
+    row.getCell(4).numFmt = '#,##0';
+    row.getCell(5).value = `${facItems.filter((i) => i.isFullQtyReleased).length} Released / ${facItems.filter((i) => i.severity === 'critical').length} Critical`;
+
+    for (let c = 1; c <= 5; c++) {
+      const cell = row.getCell(c);
+      cell.border = THIN_BORDER;
+      cell.font = { name: 'Calibri', size: 10, bold: c === 1, color: { argb: COLORS.textPrimary } };
+      cell.alignment = { vertical: 'middle', horizontal: c === 1 || c === 5 ? 'left' : 'right' };
+    }
+  });
+
+  const facTotRow = wsFac.getRow(8);
+  facTotRow.height = 24;
+  facTotRow.getCell(1).value = 'TOTAL';
+  facTotRow.getCell(2).value = { formula: 'SUM(B4:B7)', result: exportRows.length };
+  facTotRow.getCell(2).numFmt = '#,##0';
+  facTotRow.getCell(3).value = {
+    formula: 'SUM(C4:C7)',
+    result: exportRows.reduce((s, i) => s + (i.orderQty ?? 0), 0),
+  };
+  facTotRow.getCell(3).numFmt = '#,##0';
+  facTotRow.getCell(4).value = {
+    formula: 'SUM(D4:D7)',
+    result: exportRows.reduce((s, i) => s + (i.issueQty ?? 0), 0),
+  };
+  facTotRow.getCell(4).numFmt = '#,##0';
+  facTotRow.getCell(5).value = `${exportRows.filter((i) => i.isFullQtyReleased).length} Released / ${exportRows.filter((i) => i.severity === 'critical').length} Critical`;
+  for (let c = 1; c <= 5; c++) {
+    const cell = facTotRow.getCell(c);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.slateLight } };
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLORS.navyDark } };
+    cell.border = THIN_BORDER;
+    cell.alignment = { vertical: 'middle', horizontal: c === 1 || c === 5 ? 'left' : 'right' };
+  }
+
+  wsFac.columns = [{ width: 16 }, { width: 16 }, { width: 22 }, { width: 22 }, { width: 26 }];
+
+  const arrayBuffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
+}
+

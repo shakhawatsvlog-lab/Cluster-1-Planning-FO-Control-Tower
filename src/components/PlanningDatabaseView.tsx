@@ -17,11 +17,13 @@ interface PlanningDatabaseViewProps {
       orderStatus: OrderStatus;
     }>
   ) => void;
+  onSetRunningStyle: (recordId: string) => void;
 }
 
 export function PlanningDatabaseView({
   records,
   onUpdateRecord,
+  onSetRunningStyle,
 }: PlanningDatabaseViewProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('line_grouped');
   const [sortKey, setSortKey] = useState<SortKey>('default');
@@ -83,15 +85,8 @@ export function PlanningDatabaseView({
   const renderLifecycleLabel = (rec: EvaluatedPlanningRecord) => {
     if (rec.lifecycleStage === 'Running') {
       return (
-        <span className="font-mono text-xs font-semibold text-blue-700 whitespace-nowrap">
+        <span className="inline-flex items-center px-2 py-0.5 rounded bg-blue-600 text-white font-mono text-[11px] font-semibold whitespace-nowrap">
           S{rec.slot} · Running
-        </span>
-      );
-    }
-    if (rec.lifecycleStage === 'Upcoming (Next)') {
-      return (
-        <span className="font-mono text-xs font-semibold text-teal-700 whitespace-nowrap">
-          S{rec.slot} · Next Up
         </span>
       );
     }
@@ -103,9 +98,24 @@ export function PlanningDatabaseView({
       );
     }
     return (
-      <span className="font-mono text-xs text-slate-500 whitespace-nowrap">
-        S{rec.slot} · Queued
-      </span>
+      <div className="flex items-center gap-2 whitespace-nowrap">
+        <span
+          className={`font-mono text-xs whitespace-nowrap ${
+            rec.lifecycleStage === 'Upcoming (Next)'
+              ? 'font-semibold text-teal-700'
+              : 'text-slate-500'
+          }`}
+        >
+          S{rec.slot} · {rec.lifecycleStage === 'Upcoming (Next)' ? 'Next Up' : 'Queued'}
+        </span>
+        <button
+          type="button"
+          onClick={() => onSetRunningStyle(rec.id)}
+          className="px-2 py-0.5 rounded border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-[11px] font-semibold cursor-pointer"
+        >
+          Set Running
+        </button>
+      </div>
     );
   };
 
@@ -132,7 +142,7 @@ export function PlanningDatabaseView({
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-xl px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-white border border-slate-200 rounded-xl px-4 sm:px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
         <div>
           <h2 className="font-display text-sm font-semibold text-slate-900">
             Master Planning Database — Line-Wise ({lineGroups.length} Lines · {records.length} Allocations)

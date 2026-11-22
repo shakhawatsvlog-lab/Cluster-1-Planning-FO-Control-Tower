@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  CheckSquare,
   ClipboardCheck,
   ClipboardList,
   Database,
@@ -8,13 +9,16 @@ import {
   Mail,
   PackageOpen,
   ShieldCheck,
+  Sparkles,
   X,
 } from 'lucide-react';
 import type { FactoryName } from '../shared/plannerTypes.ts';
+import { PWAInstallButton } from './PWAInstallButton.tsx';
 
 export type NavTab =
   | 'dashboard'
   | 'cutting_entry'
+  | 'fo_checklist'
   | 'database'
   | 'tracker'
   | 'fo_required'
@@ -37,6 +41,7 @@ interface SidebarProps {
   counts: {
     database: number;
     cuttingEntries: number;
+    foChecklistPending: number;
     foRequired: number;
     actionRequired: number;
     planQtyPending: number;
@@ -45,8 +50,12 @@ interface SidebarProps {
   };
   adminUnlocked?: boolean;
   asOfDateRaw: string;
+  inputStartOffsetDays?: number;
+  upcomingFoOffsetDays?: number;
+  cuttingAlertDays?: number;
   mobileOpen: boolean;
   onCloseMobile: () => void;
+  onOpenShehreen?: () => void;
 }
 
 export function Sidebar({
@@ -58,8 +67,12 @@ export function Sidebar({
   counts,
   adminUnlocked = false,
   asOfDateRaw,
+  inputStartOffsetDays = 10,
+  upcomingFoOffsetDays = 15,
+  cuttingAlertDays = 10,
   mobileOpen,
   onCloseMobile,
+  onOpenShehreen,
 }: SidebarProps) {
   const navItems: Array<{
     id: NavTab;
@@ -75,6 +88,13 @@ export function Sidebar({
       icon: ClipboardCheck,
       badgeCount: counts.cuttingEntries,
       badgeTone: 'teal',
+    },
+    {
+      id: 'fo_checklist',
+      label: 'FO Weekly Checklist',
+      icon: CheckSquare,
+      badgeCount: counts.foChecklistPending,
+      badgeTone: 'amber',
     },
     {
       id: 'database',
@@ -116,13 +136,13 @@ export function Sidebar({
   const totalMc = factorySummaries.reduce((sum, f) => sum + f.capacityMc, 0);
 
   const sidebarBody = (
-    <div className="flex h-full flex-col bg-white border-r border-slate-200">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+    <div className="flex h-full flex-col bg-slate-900 text-slate-100 border-r border-slate-800">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
         <div>
-          <div className="font-display text-sm font-bold tracking-tight text-slate-900">
+          <div className="font-display text-sm font-bold tracking-tight text-white">
             Cluster 1 Planning
           </div>
-          <div className="text-xs text-slate-500 mt-0.5">
+          <div className="text-xs text-slate-400 mt-0.5">
             Master Plan · {asOfDateRaw}
           </div>
         </div>
@@ -130,7 +150,7 @@ export function Sidebar({
           type="button"
           onClick={onCloseMobile}
           aria-label="Close navigation"
-          className="lg:hidden p-2 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+          className="lg:hidden p-2 rounded-md text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"
         >
           <X className="w-4 h-4" />
         </button>
@@ -153,14 +173,14 @@ export function Sidebar({
               }}
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 isActive
-                  ? 'bg-blue-50 text-blue-700'
-                  : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
               }`}
             >
               <span className="flex items-center gap-2.5 min-w-0">
                 <Icon
                   className={`w-4 h-4 shrink-0 ${
-                    isActive ? 'text-blue-600' : 'text-slate-400'
+                    isActive ? 'text-white' : 'text-slate-400'
                   }`}
                 />
                 <span className="truncate">{item.label}</span>
@@ -168,15 +188,17 @@ export function Sidebar({
               {item.badgeCount !== undefined && (
                 <span
                   className={`font-mono text-xs tabular-nums ml-2 shrink-0 ${
-                    item.badgeTone === 'red'
-                      ? 'text-red-700 font-semibold'
-                      : item.badgeTone === 'amber'
-                        ? 'text-amber-700 font-semibold'
-                        : item.badgeTone === 'teal'
-                          ? 'text-teal-700 font-semibold'
-                          : item.badgeTone === 'blue'
-                            ? 'text-blue-700 font-semibold'
-                            : 'text-slate-500'
+                    isActive
+                      ? 'text-blue-100 font-semibold'
+                      : item.badgeTone === 'red'
+                        ? 'text-red-400 font-semibold'
+                        : item.badgeTone === 'amber'
+                          ? 'text-amber-400 font-semibold'
+                          : item.badgeTone === 'teal'
+                            ? 'text-emerald-400 font-semibold'
+                            : item.badgeTone === 'blue'
+                              ? 'text-blue-400 font-semibold'
+                              : 'text-slate-400'
                   }`}
                 >
                   {item.badgeCount}
@@ -198,12 +220,12 @@ export function Sidebar({
             }}
             className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors cursor-pointer ${
               selectedFactory === 'ALL'
-                ? 'bg-slate-900 text-white font-medium'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                ? 'bg-slate-800 text-white font-semibold ring-1 ring-slate-700'
+                : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
             }`}
           >
             <span>All 4 Factories</span>
-            <span className="font-mono tabular-nums">
+            <span className="font-mono tabular-nums text-slate-300">
               {totalLines}L · {totalMc.toLocaleString()} Mc
             </span>
           </button>
@@ -219,40 +241,61 @@ export function Sidebar({
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors cursor-pointer ${
                   isSelected
-                    ? 'bg-slate-900 text-white font-medium'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    ? 'bg-slate-800 text-white font-semibold ring-1 ring-slate-700'
+                    : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
                 }`}
               >
                 <span>{item.factory}</span>
-                <span className="font-mono tabular-nums">
+                <span className="font-mono tabular-nums text-slate-300">
                   {item.lines}L · {item.capacityMc.toLocaleString()} Mc
                 </span>
               </button>
             );
           })}
         </div>
+        {onOpenShehreen && (
+          <div className="pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                onOpenShehreen();
+                onCloseMobile();
+              }}
+              className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+            >
+              <span className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-blue-100 shrink-0" />
+                <span>Ask SHEHREEN AI</span>
+              </span>
+              <span className="text-[11px] font-mono text-blue-100">Help</span>
+            </button>
+          </div>
+        )}
       </nav>
 
-      <div className="px-4 py-3.5 border-t border-slate-200 bg-slate-50/70 text-xs text-slate-600 space-y-1.5">
+      <div className="px-4 py-3.5 border-t border-slate-800 bg-slate-950/50 text-xs text-slate-300 space-y-1.5">
         <div className="flex items-center justify-between">
-          <span>Input Start Rule</span>
-          <span className="font-mono text-slate-900">End - 10D</span>
+          <span className="text-slate-400">Input Start Rule</span>
+          <span className="font-mono text-slate-100 tabular-nums">End - {inputStartOffsetDays}D</span>
         </div>
         <div className="flex items-center justify-between">
-          <span>Upcoming FO Rule</span>
-          <span className="font-mono text-slate-900">Input - 20D</span>
+          <span className="text-slate-400">Upcoming FO Rule</span>
+          <span className="font-mono text-slate-100 tabular-nums">Input - {upcomingFoOffsetDays}D</span>
         </div>
         <div className="flex items-center justify-between">
-          <span>Cutting FO Alert</span>
-          <span className="font-mono font-semibold text-red-700 tabular-nums">
-            {counts.cuttingAlert10d} (&le; 10D)
+          <span className="text-slate-400">Cutting FO Alert</span>
+          <span className="font-mono font-semibold text-red-400 tabular-nums">
+            {counts.cuttingAlert10d} (&le; {cuttingAlertDays}D)
           </span>
         </div>
         <div className="flex items-center justify-between">
-          <span>Plan Qty Pending</span>
-          <span className="font-mono font-semibold text-amber-700 tabular-nums">
+          <span className="text-slate-400">Plan Qty Pending</span>
+          <span className="font-mono font-semibold text-amber-400 tabular-nums">
             {counts.planQtyPending}
           </span>
+        </div>
+        <div className="pt-1.5">
+          <PWAInstallButton />
         </div>
       </div>
     </div>

@@ -2,9 +2,13 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { parseMasterPlanCsv } from '../shared/plannerTypes.ts';
+import {
+  ALLOWED_FACTORIES,
+  parseMasterPlanCsv,
+} from '../shared/plannerTypes.ts';
 import type {
   DailyCuttingEntry,
+  FactoryName,
   MasterPlanMeta,
   OrderStatus,
   PlanningRecord,
@@ -19,6 +23,11 @@ import type {
 } from '../shared/reminderTypes.ts';
 import { DEFAULT_WEBSITE_CONTROL_CONFIG } from '../shared/controlPanelTypes.ts';
 import type { WebsiteControlConfig } from '../shared/controlPanelTypes.ts';
+import { DEFAULT_CUTTING_SHEET_CONFIG } from '../shared/cuttingSheetTypes.ts';
+import type {
+  CuttingSheetSyncConfig,
+  CuttingSheetSyncLog,
+} from '../shared/cuttingSheetTypes.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +37,7 @@ const MASTER_CSV_PATH = path.resolve(
   'public/assets/aistudio/11-19_updated_a06c9227.csv'
 );
 const DATA_DIR = path.resolve(ROOT_DIR, 'data');
+const BACKUP_DIR = path.resolve(DATA_DIR, 'backups');
 const STATE_FILE_PATH = path.resolve(DATA_DIR, 'workspace-state.json');
 
 export interface SmtpStoredConfig {
@@ -57,7 +67,8 @@ export interface PersistedWorkspaceData {
   reminders: ReminderWorkspaceState;
   smtpConfig: SmtpStoredConfig | null;
   siteConfig: WebsiteControlConfig;
-  adminAuth: AdminAuthStored;
+  cuttingSheetSync: CuttingSheetSyncConfig;
+  adminAuth: AdminAuthStored | null;
 }
 
 function hashPasswordWithSalt(password: string, salt: string): string {
@@ -73,9 +84,16 @@ function createPasswordRecord(plainPassword: string): AdminAuthStored {
   };
 }
 
-function getDefaultInitialAdminAuth(): AdminAuthStored {
-  const initialPass = process.env.ADMIN_PANEL_DEFAULT_PASSWORD || '00814020#Ss';
-  return createPasswordRecord(initialPass);
+function getDefaultInitialAdminAuth(): AdminAuthStored | null {
+  const envPass = (
+    process.env.ADMIN_PASSWORD ||
+    process.env.ADMIN_PANEL_DEFAULT_PASSWORD ||
+    ''
+  ).trim();
+  if (envPass.length >= 6) {
+    return createPasswordRecord(envPass);
+  }
+  return null;
 }
 
 export function loadDefaultMasterPlan() {
@@ -84,15 +102,63 @@ export function loadDefaultMasterPlan() {
 }
 
 function normalizeRecords(records: PlanningRecord[]): PlanningRecord[] {
-  return records.map((r) => ({
-    ...r,
-    orderStatus: (r.orderStatus ?? (r.isFinished ? 'Order Closed' : 'Open')) as OrderStatus,
-    isFinished: r.orderStatus === 'Order Closed' || Boolean(r.isFinished),
+  return records.map((r) => {
+    const orderStatus = (r.orderStatus ?? (r.isFinished ? 'Order Closed' : 'Open')) as OrderStatus;
+    const isClosed = orderStatus === 'Order Closed' || Boolean(r.isFinished);
+    return {
+      ...r,
+      orderStatus,
+      isFinished: isClosed,
+      isManualRunning: isClosed ? false : Boolean(r.isManualRunning),
+      foChecklistConfirmed: Boolean(r.foChecklistConfirmed),
+      foChecklistConfirmedAtIso:
+        typeof r.foChecklistConfirmedAtIso === 'string' ? r.foChecklistConfirmedAtIso : null,
+      upcomingFoSelected: Boolean(r.upcomingFoSelected),
+      upcomingFoSelectedAtIso:
+        typeof r.upcomingFoSelectedAtIso === 'string' ? r.upcomingFoSelectedAtIso : null,
+      sheetRemark: typeof r.sheetRemark === 'string' ? r.sheetRemark : '',
+      foFullQtyReleased: Boolean(r.foFullQtyReleased),
+    };
+  });
+}
+
+function normalizeRecipients(
+  recipients: Partial<ReminderRecipient>[] | undefined,
+  fallbackSendTime: string
+): ReminderRecipient[] {
+  if (!Array.isArray(recipients)) return [];
+  return recipients.map((r) => ({
+    id: r.id || `RECIP-${Date.now().toString(36).toUpperCase()}`,
+    name: r.name || 'Recipient',
+    email: r.email || '',
+    role: r.role || 'Merchandising / Planning',
+    factories: Array.isArray(r.factories) ? r.factories : [],
+    active: r.active !== undefined ? Boolean(r.active) : true,
+    frequency:
+      r.frequency === 'weekly' || r.frequency === 'monthly' || r.frequency === 'daily'
+        ? r.frequency
+        : 'daily',
+    sendTime:
+      typeof r.sendTime === 'string' && /^\d{2}:\d{2}$/.test(r.sendTime)
+        ? r.sendTime
+        : fallbackSendTime,
+    dayOfWeek:
+      typeof r.dayOfWeek === 'number' && r.dayOfWeek >= 0 && r.dayOfWeek <= 6
+        ? Math.round(r.dayOfWeek)
+        : 1,
+    dayOfMonth:
+      typeof r.dayOfMonth === 'number' && r.dayOfMonth >= 1 && r.dayOfMonth <= 31
+        ? Math.round(r.dayOfMonth)
+        : 1,
+    lastSentDateLocal: typeof r.lastSentDateLocal === 'string' ? r.lastSentDateLocal : null,
+    customNote: typeof r.customNote === 'string' ? r.customNote : '',
+    addedAtIso: r.addedAtIso || new Date().toISOString(),
   }));
 }
 
 function createInitialState(): PersistedWorkspaceData {
   const parsed = loadDefaultMasterPlan();
+  const envRecovery = (process.env.ADMIN_RECOVERY_EMAIL || '').trim().toLowerCase();
   return {
     meta: parsed.meta,
     records: parsed.records,
@@ -106,7 +172,11 @@ function createInitialState(): PersistedWorkspaceData {
       logs: [],
     },
     smtpConfig: null,
-    siteConfig: { ...DEFAULT_WEBSITE_CONTROL_CONFIG },
+    siteConfig: {
+      ...DEFAULT_WEBSITE_CONTROL_CONFIG,
+      ...(envRecovery ? { recoveryEmail: envRecovery } : {}),
+    },
+    cuttingSheetSync: { ...DEFAULT_CUTTING_SHEET_CONFIG },
     adminAuth: getDefaultInitialAdminAuth(),
   };
 }
@@ -126,6 +196,14 @@ export function getWorkspaceState(): PersistedWorkspaceData {
         const hasAdminAuth = Boolean(
           parsed.adminAuth?.passwordHash && parsed.adminAuth?.passwordSalt
         );
+        const mergedSchedule: ReminderScheduleConfig = {
+          ...DEFAULT_REMINDER_SCHEDULE,
+          ...(parsed.reminders?.schedule ?? {}),
+          customMessage:
+            typeof parsed.reminders?.schedule?.customMessage === 'string'
+              ? parsed.reminders.schedule.customMessage
+              : '',
+        };
         cachedState = {
           meta: parsed.meta,
           records: normalizeRecords(parsed.records),
@@ -137,13 +215,11 @@ export function getWorkspaceState(): PersistedWorkspaceData {
           hasCustomEdits: Boolean(parsed.hasCustomEdits),
           updatedAtIso: parsed.updatedAtIso || new Date().toISOString(),
           reminders: {
-            recipients: Array.isArray(parsed.reminders?.recipients)
-              ? parsed.reminders.recipients
-              : [],
-            schedule: {
-              ...DEFAULT_REMINDER_SCHEDULE,
-              ...(parsed.reminders?.schedule ?? {}),
-            },
+            recipients: normalizeRecipients(
+              parsed.reminders?.recipients,
+              mergedSchedule.dailySendTime
+            ),
+            schedule: mergedSchedule,
             logs: Array.isArray(parsed.reminders?.logs) ? parsed.reminders.logs : [],
           },
           smtpConfig: parsed.smtpConfig ?? null,
@@ -151,11 +227,24 @@ export function getWorkspaceState(): PersistedWorkspaceData {
             ...DEFAULT_WEBSITE_CONTROL_CONFIG,
             ...(parsed.siteConfig ?? {}),
           },
+          cuttingSheetSync: {
+            ...DEFAULT_CUTTING_SHEET_CONFIG,
+            ...(parsed.cuttingSheetSync ?? {}),
+            factoryUrls: {
+              ...(parsed.cuttingSheetSync?.factoryUrls ?? {}),
+            },
+            factoryStatuses: {
+              ...(parsed.cuttingSheetSync?.factoryStatuses ?? {}),
+            },
+            logs: Array.isArray(parsed.cuttingSheetSync?.logs)
+              ? parsed.cuttingSheetSync!.logs
+              : [],
+          },
           adminAuth: hasAdminAuth
             ? (parsed.adminAuth as AdminAuthStored)
             : getDefaultInitialAdminAuth(),
         };
-        if (!hasAdminAuth) {
+        if (!hasAdminAuth && cachedState.adminAuth) {
           writeStateToDisk(cachedState);
         }
         return cachedState;
@@ -170,8 +259,25 @@ export function getWorkspaceState(): PersistedWorkspaceData {
   return cachedState;
 }
 
-export function getPublicWorkspaceState() {
+export function getPublicWorkspaceState(isAdmin = false) {
   const state = getWorkspaceState();
+  const needsInitialSetup = !isAdminPasswordConfigured();
+
+  if (isAdmin) {
+    return {
+      meta: state.meta,
+      records: state.records,
+      cuttingEntries: state.cuttingEntries,
+      referenceDateIso: state.referenceDateIso,
+      hasCustomEdits: state.hasCustomEdits,
+      updatedAtIso: state.updatedAtIso,
+      reminders: state.reminders,
+      siteConfig: state.siteConfig,
+      cuttingSheetSync: state.cuttingSheetSync,
+      needsInitialSetup,
+    };
+  }
+
   return {
     meta: state.meta,
     records: state.records,
@@ -179,8 +285,32 @@ export function getPublicWorkspaceState() {
     referenceDateIso: state.referenceDateIso,
     hasCustomEdits: state.hasCustomEdits,
     updatedAtIso: state.updatedAtIso,
-    reminders: state.reminders,
-    siteConfig: state.siteConfig,
+    reminders: {
+      recipients: [],
+      schedule: {
+        ...state.reminders.schedule,
+        customMessage: '',
+      },
+      logs: [],
+    },
+    siteConfig: {
+      ...state.siteConfig,
+      recoveryEmail: '',
+    },
+    cuttingSheetSync: {
+      ...state.cuttingSheetSync,
+      sheetUrl: '',
+      factoryUrls: {},
+      lastContentHash: '',
+      lastMessage:
+        state.cuttingSheetSync.lastStatus === 'Success'
+          ? 'Synced'
+          : state.cuttingSheetSync.lastStatus === 'Error'
+            ? 'Sync attention needed'
+            : '',
+      logs: [],
+    },
+    needsInitialSetup,
   };
 }
 
@@ -197,9 +327,53 @@ function writeStateToDisk(state: PersistedWorkspaceData): void {
   }
 }
 
+function saveSafetyBackupSnapshot(reason: 'reset' | 'restore', state: PersistedWorkspaceData): void {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.resolve(BACKUP_DIR, `pre-${reason}-${stamp}.json`);
+    const safeSnapshot = {
+      meta: state.meta,
+      records: state.records,
+      cuttingEntries: state.cuttingEntries,
+      referenceDateIso: state.referenceDateIso,
+      reminders: state.reminders,
+      siteConfig: state.siteConfig,
+      cuttingSheetSync: state.cuttingSheetSync,
+    };
+    fs.writeFileSync(filePath, JSON.stringify(safeSnapshot, null, 2), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+
+    const files = fs
+      .readdirSync(BACKUP_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .sort()
+      .reverse();
+    for (const old of files.slice(15)) {
+      fs.unlinkSync(path.resolve(BACKUP_DIR, old));
+    }
+  } catch (err) {
+    console.error('Failed to create pre-change safety snapshot:', err);
+  }
+}
+
+export function isAdminPasswordConfigured(): boolean {
+  const auth = getWorkspaceState().adminAuth;
+  return Boolean(auth?.passwordHash && auth?.passwordSalt);
+}
+
+export function getAdminAuthUpdatedAtIso(): string | null {
+  return getWorkspaceState().adminAuth?.updatedAtIso ?? null;
+}
+
 export function verifyAdminPassword(candidate: string): boolean {
   if (!candidate) return false;
   const auth = getWorkspaceState().adminAuth;
+  if (!auth?.passwordHash || !auth?.passwordSalt) return false;
   const computedHex = hashPasswordWithSalt(candidate, auth.passwordSalt);
   const a = Buffer.from(computedHex, 'hex');
   const b = Buffer.from(auth.passwordHash, 'hex');
@@ -215,6 +389,28 @@ export function updateAdminPassword(newPassword: string): void {
     adminAuth: createPasswordRecord(newPassword),
   };
   writeStateToDisk(cachedState);
+}
+
+export function bootstrapInitialAdminPassword(
+  newPassword: string,
+  recoveryEmail?: string
+): PersistedWorkspaceData {
+  if (isAdminPasswordConfigured()) {
+    throw new Error('Admin password is already configured.');
+  }
+  const current = getWorkspaceState();
+  const nextSiteConfig =
+    recoveryEmail && recoveryEmail.trim()
+      ? { ...current.siteConfig, recoveryEmail: recoveryEmail.trim().toLowerCase() }
+      : current.siteConfig;
+  cachedState = {
+    ...current,
+    updatedAtIso: new Date().toISOString(),
+    siteConfig: nextSiteConfig,
+    adminAuth: createPasswordRecord(newPassword),
+  };
+  writeStateToDisk(cachedState);
+  return cachedState;
 }
 
 export function getSiteConfig(): WebsiteControlConfig {
@@ -260,6 +456,7 @@ export function updatePlanningWorkspace(patch: {
 
 export function resetPlanningWorkspace(): PersistedWorkspaceData {
   const current = getWorkspaceState();
+  saveSafetyBackupSnapshot('reset', current);
   const defaults = loadDefaultMasterPlan();
   const next: PersistedWorkspaceData = {
     ...current,
@@ -272,6 +469,250 @@ export function resetPlanningWorkspace(): PersistedWorkspaceData {
   cachedState = next;
   writeStateToDisk(next);
   return next;
+}
+
+export function restoreWorkspaceSnapshot(snapshot: {
+  meta: MasterPlanMeta;
+  records: PlanningRecord[];
+  cuttingEntries?: DailyCuttingEntry[];
+  referenceDateIso?: string;
+  reminders?: Partial<ReminderWorkspaceState>;
+  siteConfig?: Partial<WebsiteControlConfig>;
+  cuttingSheetSync?: Partial<CuttingSheetSyncConfig>;
+}): PersistedWorkspaceData {
+  const current = getWorkspaceState();
+  saveSafetyBackupSnapshot('restore', current);
+  const mergedSchedule: ReminderScheduleConfig = {
+    ...DEFAULT_REMINDER_SCHEDULE,
+    ...current.reminders.schedule,
+    ...(snapshot.reminders?.schedule ?? {}),
+  };
+  const next: PersistedWorkspaceData = {
+    ...current,
+    meta: snapshot.meta,
+    records: normalizeRecords(snapshot.records),
+    cuttingEntries: Array.isArray(snapshot.cuttingEntries)
+      ? snapshot.cuttingEntries
+      : current.cuttingEntries,
+    referenceDateIso: snapshot.referenceDateIso || current.referenceDateIso,
+    hasCustomEdits: true,
+    updatedAtIso: new Date().toISOString(),
+    reminders: snapshot.reminders
+      ? {
+          recipients: normalizeRecipients(
+            snapshot.reminders.recipients,
+            mergedSchedule.dailySendTime
+          ),
+          schedule: mergedSchedule,
+          logs: Array.isArray(snapshot.reminders.logs)
+            ? snapshot.reminders.logs
+            : current.reminders.logs,
+        }
+      : current.reminders,
+    siteConfig: snapshot.siteConfig
+      ? {
+          ...current.siteConfig,
+          ...snapshot.siteConfig,
+        }
+      : current.siteConfig,
+    cuttingSheetSync: snapshot.cuttingSheetSync
+      ? {
+          ...current.cuttingSheetSync,
+          ...snapshot.cuttingSheetSync,
+          factoryUrls: {
+            ...(snapshot.cuttingSheetSync.factoryUrls ?? current.cuttingSheetSync.factoryUrls),
+          },
+          factoryStatuses: {
+            ...(snapshot.cuttingSheetSync.factoryStatuses ??
+              current.cuttingSheetSync.factoryStatuses),
+          },
+        }
+      : current.cuttingSheetSync,
+  };
+  cachedState = next;
+  writeStateToDisk(next);
+  return next;
+}
+
+export function updateCuttingSheetSyncConfig(
+  patch: Partial<CuttingSheetSyncConfig>
+): CuttingSheetSyncConfig {
+  const current = getWorkspaceState();
+  const nextSync: CuttingSheetSyncConfig = {
+    ...current.cuttingSheetSync,
+    ...patch,
+    factoryUrls:
+      patch.factoryUrls !== undefined
+        ? { ...patch.factoryUrls }
+        : { ...current.cuttingSheetSync.factoryUrls },
+    factoryStatuses:
+      patch.factoryStatuses !== undefined
+        ? { ...patch.factoryStatuses }
+        : { ...(current.cuttingSheetSync.factoryStatuses ?? {}) },
+    logs: patch.logs !== undefined ? patch.logs : current.cuttingSheetSync.logs,
+  };
+  cachedState = {
+    ...current,
+    updatedAtIso: new Date().toISOString(),
+    cuttingSheetSync: nextSync,
+  };
+  writeStateToDisk(cachedState);
+  return nextSync;
+}
+
+export interface RecordSheetPatch {
+  recordIds: string[];
+  plannedQty?: number | null;
+  dailyTargetQty?: number | null;
+  sheetRemark?: string;
+  foFullQtyReleased?: boolean;
+}
+
+export function applySyncedCuttingEntries(params: {
+  syncedEntries?: DailyCuttingEntry[];
+  replaceSheetEntries: boolean;
+  scopedFactories?: FactoryName[];
+  recordUpdates?: RecordSheetPatch[];
+  syncPatch: Partial<CuttingSheetSyncConfig>;
+  logEntry?: CuttingSheetSyncLog;
+}): PersistedWorkspaceData {
+  const current = getWorkspaceState();
+  let nextEntries = current.cuttingEntries;
+  let nextRecords = current.records;
+  let recordsModified = false;
+
+  if (params.recordUpdates && params.recordUpdates.length > 0) {
+    const patchByRecordId = new Map<
+      string,
+      {
+        plannedQty?: number | null;
+        dailyTargetQty?: number | null;
+        sheetRemark?: string;
+        foFullQtyReleased?: boolean;
+      }
+    >();
+    for (const upd of params.recordUpdates) {
+      for (const rid of upd.recordIds) {
+        const prev = patchByRecordId.get(rid) ?? {};
+        const mergedRemark =
+          upd.sheetRemark && upd.sheetRemark.trim()
+            ? prev.sheetRemark && prev.sheetRemark !== upd.sheetRemark.trim()
+              ? `${prev.sheetRemark} · ${upd.sheetRemark.trim()}`
+              : upd.sheetRemark.trim()
+            : prev.sheetRemark;
+        patchByRecordId.set(rid, {
+          plannedQty:
+            upd.plannedQty !== undefined && upd.plannedQty !== null ? upd.plannedQty : prev.plannedQty,
+          dailyTargetQty:
+            upd.dailyTargetQty !== undefined && upd.dailyTargetQty !== null
+              ? upd.dailyTargetQty
+              : prev.dailyTargetQty,
+          sheetRemark: mergedRemark,
+          foFullQtyReleased: Boolean(prev.foFullQtyReleased || upd.foFullQtyReleased),
+        });
+      }
+    }
+    if (patchByRecordId.size > 0) {
+      nextRecords = current.records.map((rec) => {
+        const upd = patchByRecordId.get(rec.id);
+        if (!upd) return rec;
+        const nextPlanned =
+          upd.plannedQty !== undefined && upd.plannedQty !== null ? upd.plannedQty : rec.plannedQty;
+        const nextTarget =
+          upd.dailyTargetQty !== undefined && upd.dailyTargetQty !== null
+            ? upd.dailyTargetQty
+            : rec.dailyTargetQty;
+        const nextRemark =
+          upd.sheetRemark !== undefined && upd.sheetRemark.trim()
+            ? upd.sheetRemark.trim()
+            : rec.sheetRemark || '';
+        const nextReleased = Boolean(rec.foFullQtyReleased || upd.foFullQtyReleased);
+        const nextFoStatus =
+          nextReleased && rec.foStatus !== 'In-House' ? 'In-House' : rec.foStatus;
+        const nextIssueQty =
+          nextReleased && (rec.foIssueQty === null || rec.foIssueQty === undefined) && nextPlanned !== null
+            ? nextPlanned
+            : rec.foIssueQty;
+
+        if (
+          nextPlanned === rec.plannedQty &&
+          nextTarget === rec.dailyTargetQty &&
+          nextRemark === (rec.sheetRemark || '') &&
+          nextReleased === Boolean(rec.foFullQtyReleased) &&
+          nextFoStatus === rec.foStatus &&
+          nextIssueQty === rec.foIssueQty
+        ) {
+          return rec;
+        }
+        recordsModified = true;
+        return {
+          ...rec,
+          plannedQty: nextPlanned,
+          foIssueQty: nextIssueQty,
+          dailyTargetQty: nextTarget,
+          sheetRemark: nextRemark,
+          foFullQtyReleased: nextReleased,
+          foStatus: nextFoStatus,
+        };
+      });
+    }
+  }
+
+  if (params.replaceSheetEntries && params.syncedEntries) {
+    const scopeSet =
+      params.scopedFactories && params.scopedFactories.length > 0
+        ? new Set<FactoryName>(params.scopedFactories)
+        : new Set<FactoryName>(ALLOWED_FACTORIES);
+
+    const preserved = current.cuttingEntries.filter(
+      (e) => e.source !== 'sheet' || !scopeSet.has(e.factory)
+    );
+    nextEntries = [...params.syncedEntries, ...preserved].sort((a, b) =>
+      b.dateIso.localeCompare(a.dateIso)
+    );
+  }
+
+  const allSheetEntries = nextEntries.filter((e) => e.source === 'sheet');
+  const totalSheetQty = allSheetEntries.reduce((sum, e) => sum + e.cuttingQty, 0);
+
+  const nextLogs = params.logEntry
+    ? [params.logEntry, ...current.cuttingSheetSync.logs].slice(0, 30)
+    : current.cuttingSheetSync.logs;
+
+  const nextSync: CuttingSheetSyncConfig = {
+    ...current.cuttingSheetSync,
+    ...params.syncPatch,
+    factoryStatuses: {
+      ...(current.cuttingSheetSync.factoryStatuses ?? {}),
+      ...(params.syncPatch.factoryStatuses ?? {}),
+    },
+    lastMatchedCount:
+      params.syncPatch.lastMatchedCount !== undefined
+        ? params.syncPatch.lastMatchedCount
+        : allSheetEntries.length,
+    lastTotalQty:
+      params.syncPatch.lastTotalQty !== undefined
+        ? params.syncPatch.lastTotalQty
+        : totalSheetQty,
+    logs: nextLogs,
+  };
+
+  if (params.replaceSheetEntries) {
+    nextSync.lastMatchedCount = allSheetEntries.length;
+    nextSync.lastTotalQty = totalSheetQty;
+  }
+
+  cachedState = {
+    ...current,
+    records: nextRecords,
+    cuttingEntries: nextEntries,
+    hasCustomEdits:
+      params.replaceSheetEntries || recordsModified ? true : current.hasCustomEdits,
+    updatedAtIso: new Date().toISOString(),
+    cuttingSheetSync: nextSync,
+  };
+  writeStateToDisk(cachedState);
+  return cachedState;
 }
 
 export function updateReminderSchedule(

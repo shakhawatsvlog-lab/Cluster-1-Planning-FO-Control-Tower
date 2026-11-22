@@ -81,7 +81,7 @@ export function ActionListsView({ mode, records, onUpdateRecord }: ActionListsVi
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:px-5 flex flex-wrap items-center justify-between gap-4 shadow-xs">
         <div>
           <h2 className="font-display text-sm font-semibold text-slate-900">
             {mode === 'fo'
@@ -107,7 +107,7 @@ export function ActionListsView({ mode, records, onUpdateRecord }: ActionListsVi
         <div className="flex flex-wrap items-center gap-1.5">
           {[
             { id: 'all' as const, label: 'All Action Items' },
-            { id: 'qty_pending' as const, label: '⚠ Plan Qty Pending' },
+            { id: 'qty_pending' as const, label: 'Plan Qty Pending' },
             { id: 'cutting_10d' as const, label: 'Cutting <= 10D' },
             { id: 'urgent_trigger' as const, label: 'Trigger <= 14 Days' },
             { id: 'open_capacity' as const, label: 'Open Capacity Slots' },
@@ -119,7 +119,7 @@ export function ActionListsView({ mode, records, onUpdateRecord }: ActionListsVi
               onClick={() => setSubFilter(tab.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap cursor-pointer ${
                 subFilter === tab.id
-                  ? 'bg-slate-900 text-white border-slate-900'
+                  ? 'bg-blue-600 text-white border-blue-600'
                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
               }`}
             >
@@ -129,7 +129,7 @@ export function ActionListsView({ mode, records, onUpdateRecord }: ActionListsVi
         </div>
       )}
 
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>

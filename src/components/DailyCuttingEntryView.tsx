@@ -1,5 +1,18 @@
-import { useMemo, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  FileSpreadsheet,
+  Link2,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+  Upload,
+} from 'lucide-react';
 import {
   ALLOWED_FACTORIES,
   ORDER_STATUS_OPTIONS,
@@ -11,12 +24,32 @@ import type {
   FactoryName,
   OrderStatus,
 } from '../shared/plannerTypes.ts';
+import { CUTTING_SYNC_INTERVAL_OPTIONS } from '../shared/cuttingSheetTypes.ts';
+import type {
+  CuttingSheetSyncConfig,
+  CuttingSheetSyncMode,
+  FactorySheetUrlMap,
+} from '../shared/cuttingSheetTypes.ts';
 
 interface DailyCuttingEntryViewProps {
   allRecords: EvaluatedPlanningRecord[];
   filteredRecords: EvaluatedPlanningRecord[];
   cuttingEntries: DailyCuttingEntry[];
   referenceDateIso: string;
+  cuttingSheetSync: CuttingSheetSyncConfig;
+  onSaveCuttingSheetConfig: (
+    patch: Partial<
+      Pick<
+        CuttingSheetSyncConfig,
+        'enabled' | 'sheetUrl' | 'factoryUrls' | 'syncMode' | 'intervalMinutes'
+      >
+    >
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onSyncCuttingSheetNow: () => Promise<{ ok: boolean; message: string }>;
+  onUploadCuttingFile: (
+    file: File,
+    factoryOverride?: FactoryName
+  ) => Promise<{ ok: boolean; message: string }>;
   onAddCuttingEntry: (entry: Omit<DailyCuttingEntry, 'id'>) => void;
   onDeleteCuttingEntry: (entryId: string) => void;
   onUpdateRecord: (
@@ -29,6 +62,7 @@ interface DailyCuttingEntryViewProps {
       orderStatus: OrderStatus;
     }>
   ) => void;
+  onSetRunningStyle: (recordId: string) => void;
 }
 
 export function DailyCuttingEntryView({
@@ -36,10 +70,54 @@ export function DailyCuttingEntryView({
   filteredRecords,
   cuttingEntries,
   referenceDateIso,
+  cuttingSheetSync,
+  onSaveCuttingSheetConfig,
+  onSyncCuttingSheetNow,
+  onUploadCuttingFile,
   onAddCuttingEntry,
   onDeleteCuttingEntry,
   onUpdateRecord,
+  onSetRunningStyle,
 }: DailyCuttingEntryViewProps) {
+  // Online Cutting Sheet Sync draft state
+  const [sheetEnabled, setSheetEnabled] = useState(cuttingSheetSync.enabled);
+  const [sheetUrlInput, setSheetUrlInput] = useState(cuttingSheetSync.sheetUrl);
+  const [factoryUrlsInput, setFactoryUrlsInput] = useState<FactorySheetUrlMap>(
+    cuttingSheetSync.factoryUrls || {}
+  );
+  const [syncModeInput, setSyncModeInput] = useState<CuttingSheetSyncMode>(
+    cuttingSheetSync.syncMode
+  );
+  const [intervalInput, setIntervalInput] = useState<number>(
+    cuttingSheetSync.intervalMinutes || 60
+  );
+  const [showMainUrl, setShowMainUrl] = useState<boolean>(() =>
+    Boolean(cuttingSheetSync.sheetUrl.trim())
+  );
+  const [showSyncLogs, setShowSyncLogs] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [syncingNow, setSyncingNow] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadFactoryOverride, setUploadFactoryOverride] = useState<FactoryName | 'AUTO'>('AUTO');
+  const [syncNotice, setSyncNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const cuttingFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setSheetEnabled(cuttingSheetSync.enabled);
+    setSheetUrlInput(cuttingSheetSync.sheetUrl);
+    setFactoryUrlsInput(cuttingSheetSync.factoryUrls || {});
+    setSyncModeInput(cuttingSheetSync.syncMode);
+    setIntervalInput(cuttingSheetSync.intervalMinutes || 60);
+    if (cuttingSheetSync.sheetUrl.trim()) {
+      setShowMainUrl(true);
+    }
+  }, [
+    cuttingSheetSync.enabled,
+    cuttingSheetSync.sheetUrl,
+    cuttingSheetSync.factoryUrls,
+    cuttingSheetSync.syncMode,
+    cuttingSheetSync.intervalMinutes,
+  ]);
   const [entryDateIso, setEntryDateIso] = useState(referenceDateIso);
   const [formFactory, setFormFactory] = useState<FactoryName>('ALEX 5');
   const [formLine, setFormLine] = useState<string>('Line 51');
@@ -96,21 +174,905 @@ export function DailyCuttingEntryView({
     return filteredRecords.filter((r) => r.lifecycleStage === 'Running');
   }, [filteredRecords]);
 
+  const hasAnyDraftUrl = useMemo(
+    () =>
+      Boolean(sheetUrlInput.trim()) ||
+      ALLOWED_FACTORIES.some((fac) => Boolean((factoryUrlsInput[fac] || '').trim())),
+    [sheetUrlInput, factoryUrlsInput]
+  );
+
+  const handleSaveSheetSetup = async (overrideEnabled?: boolean) => {
+    setSavingConfig(true);
+    setSyncNotice(null);
+    const nextEnabled =
+      overrideEnabled !== undefined
+        ? overrideEnabled
+        : hasAnyDraftUrl
+          ? true
+          : sheetEnabled;
+
+    const res = await onSaveCuttingSheetConfig({
+      enabled: nextEnabled,
+      sheetUrl: sheetUrlInput.trim(),
+      factoryUrls: factoryUrlsInput,
+      syncMode: syncModeInput,
+      intervalMinutes: intervalInput,
+    });
+    setSavingConfig(false);
+    if (res.ok) {
+      setSheetEnabled(nextEnabled);
+      setSyncNotice({
+        ok: true,
+        text: nextEnabled
+          ? 'All factory sheet links saved & daily/periodic Auto-Sync enabled.'
+          : 'Online cutting sheet settings saved (Auto-Sync paused).',
+      });
+    } else {
+      setSyncNotice({
+        ok: false,
+        text: res.error || 'Could not save online cutting sheet settings.',
+      });
+    }
+    return res.ok;
+  };
+
+  const handleTriggerSyncNow = async () => {
+    setSyncingNow(true);
+    setSyncNotice(null);
+    const desiredEnabled = hasAnyDraftUrl ? true : sheetEnabled;
+    const hasDraftChanges =
+      sheetUrlInput.trim() !== cuttingSheetSync.sheetUrl.trim() ||
+      desiredEnabled !== cuttingSheetSync.enabled ||
+      syncModeInput !== cuttingSheetSync.syncMode ||
+      intervalInput !== cuttingSheetSync.intervalMinutes ||
+      JSON.stringify(factoryUrlsInput) !== JSON.stringify(cuttingSheetSync.factoryUrls || {});
+
+    if (hasDraftChanges) {
+      const saved = await onSaveCuttingSheetConfig({
+        enabled: desiredEnabled,
+        sheetUrl: sheetUrlInput.trim(),
+        factoryUrls: factoryUrlsInput,
+        syncMode: syncModeInput,
+        intervalMinutes: intervalInput,
+      });
+      if (!saved.ok) {
+        setSyncingNow(false);
+        setSyncNotice({
+          ok: false,
+          text: saved.error || 'Please save valid sheet settings first.',
+        });
+        return;
+      }
+      setSheetEnabled(desiredEnabled);
+    }
+
+    const res = await onSyncCuttingSheetNow();
+    setSyncingNow(false);
+    setSyncNotice({ ok: res.ok, text: res.message });
+  };
+
+  const handleDownloadSampleTemplate = () => {
+    const sampleRows = ALLOWED_FACTORIES.map((fac, idx) => {
+      const rec =
+        allRecords.find(
+          (r) =>
+            r.factory === fac &&
+            r.lifecycleStage === 'Running' &&
+            r.pgNumber &&
+            r.pgNumber !== '—'
+        ) ||
+        allRecords.find((r) => r.factory === fac && r.pgNumber && r.pgNumber !== '—');
+      const pg = rec?.pgNumber || (idx === 2 ? 'PG-36280' : `PG-36${100 + idx}`);
+      const line = rec?.line || `Line ${idx + 1}`;
+      const style = (rec?.style || 'Sample Style').replace(/"/g, '""');
+      const orderQty = rec?.plannedQty || 45000;
+      const cutQty = rec?.cuttingFinishedQty || 12500;
+      const targetQty = rec?.dailyTargetQty || 1500;
+      return `${referenceDateIso},${fac},${line},${pg},"${style}",${orderQty},${cutQty},${targetQty},Latest Daily Update`;
+    });
+    const csvContent = [
+      'Date,Factory,Line,PG#,Style,Order Qty,Total Cutting Qty,Daily Target,Remarks',
+      ...sampleRows,
+    ].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'Online_Cutting_Sheet_Template.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCuttingFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingFile(true);
+    setSyncNotice(null);
+    const res = await onUploadCuttingFile(
+      file,
+      uploadFactoryOverride === 'AUTO' ? undefined : uploadFactoryOverride
+    );
+    setUploadingFile(false);
+    setSyncNotice({ ok: res.ok, text: res.message });
+  };
+
+  const sheetSyncedCount = useMemo(
+    () => cuttingEntries.filter((e) => e.source === 'sheet').length,
+    [cuttingEntries]
+  );
+
+  const perFactorySyncedStats = useMemo(() => {
+    const map: Record<FactoryName, { count: number; qty: number }> = {
+      'ALEX 1': { count: 0, qty: 0 },
+      'ALEX 3': { count: 0, qty: 0 },
+      'ALEX 5': { count: 0, qty: 0 },
+      'ALEX 12': { count: 0, qty: 0 },
+    };
+    for (const entry of cuttingEntries) {
+      if (entry.source !== 'sheet') continue;
+      if (map[entry.factory]) {
+        map[entry.factory].count += 1;
+        map[entry.factory].qty += entry.cuttingQty;
+      }
+    }
+    return map;
+  }, [cuttingEntries]);
+
+  const [pgScopeFilter, setPgScopeFilter] = useState<'synced_or_filled' | 'all'>('synced_or_filled');
+
+  const pgSummaryRows = useMemo(() => {
+    const entryMetaByPg = new Map<
+      string,
+      {
+        latestDateIso: string;
+        sheetQty: number;
+        manualQty: number;
+        hasSheet: boolean;
+      }
+    >();
+    for (const e of cuttingEntries) {
+      const pg = (e.pgNumber || '').trim().toUpperCase();
+      if (!pg || pg === '—') continue;
+      const key = `${e.factory}::${pg}`;
+      const prev = entryMetaByPg.get(key) ?? {
+        latestDateIso: '',
+        sheetQty: 0,
+        manualQty: 0,
+        hasSheet: false,
+      };
+      if (!prev.latestDateIso || e.dateIso > prev.latestDateIso) {
+        prev.latestDateIso = e.dateIso;
+      }
+      if (e.source === 'sheet') {
+        prev.sheetQty = Math.max(prev.sheetQty, e.cuttingQty || 0);
+        prev.hasSheet = true;
+      } else {
+        prev.manualQty += e.cuttingQty || 0;
+      }
+      entryMetaByPg.set(key, prev);
+    }
+
+    const pgMap = new Map<
+      string,
+      {
+        key: string;
+        factory: FactoryName;
+        pgNumber: string;
+        style: string;
+        lines: string[];
+        recordIds: string[];
+        orderQty: number | null;
+        dailyTargetQty: number | null;
+        cuttingFinishedQty: number;
+        latestDateIso: string;
+        hasSheet: boolean;
+        hasRunning: boolean;
+        allClosed: boolean;
+      }
+    >();
+
+    for (const rec of filteredRecords) {
+      const pg = (rec.pgNumber || '').trim();
+      if (!pg || pg === '—') continue;
+      const key = `${rec.factory}::${pg.toUpperCase()}`;
+      const entryMeta = entryMetaByPg.get(key);
+      const existing = pgMap.get(key);
+      if (!existing) {
+        const sheetPlusManual = entryMeta
+          ? entryMeta.sheetQty + entryMeta.manualQty
+          : rec.cuttingFinishedQty;
+        pgMap.set(key, {
+          key,
+          factory: rec.factory,
+          pgNumber: pg,
+          style: rec.style,
+          lines: [rec.line],
+          recordIds: [rec.id],
+          orderQty: rec.plannedQty,
+          dailyTargetQty: rec.dailyTargetQty,
+          cuttingFinishedQty: Math.max(sheetPlusManual, rec.cuttingFinishedQty),
+          latestDateIso: entryMeta?.latestDateIso || '',
+          hasSheet: Boolean(entryMeta?.hasSheet),
+          hasRunning: rec.lifecycleStage === 'Running',
+          allClosed: rec.orderStatus === 'Order Closed',
+        });
+      } else {
+        if (!existing.lines.includes(rec.line)) existing.lines.push(rec.line);
+        existing.recordIds.push(rec.id);
+        if (existing.orderQty === null && rec.plannedQty !== null) {
+          existing.orderQty = rec.plannedQty;
+        }
+        if (existing.dailyTargetQty === null && rec.dailyTargetQty !== null) {
+          existing.dailyTargetQty = rec.dailyTargetQty;
+        }
+        if (rec.lifecycleStage === 'Running') existing.hasRunning = true;
+        if (rec.orderStatus !== 'Order Closed') existing.allClosed = false;
+      }
+    }
+
+    const rows = Array.from(pgMap.values());
+    const filtered =
+      pgScopeFilter === 'synced_or_filled'
+        ? rows.filter(
+            (r) =>
+              r.hasSheet ||
+              r.cuttingFinishedQty > 0 ||
+              r.orderQty !== null ||
+              r.dailyTargetQty !== null
+          )
+        : rows;
+
+    const listToSort = filtered.length > 0 ? filtered : rows;
+    return listToSort.sort((a, b) => {
+      if (a.latestDateIso !== b.latestDateIso) {
+        return (b.latestDateIso || '').localeCompare(a.latestDateIso || '');
+      }
+      if (a.cuttingFinishedQty !== b.cuttingFinishedQty) {
+        return b.cuttingFinishedQty - a.cuttingFinishedQty;
+      }
+      return a.pgNumber.localeCompare(b.pgNumber);
+    });
+  }, [filteredRecords, cuttingEntries, pgScopeFilter]);
+
+  const pgTotalsSummary = useMemo(() => {
+    let totalOrderQty = 0;
+    let totalCutQty = 0;
+    let totalDailyTarget = 0;
+    for (const r of pgSummaryRows) {
+      totalOrderQty += r.orderQty ?? 0;
+      totalCutQty += r.cuttingFinishedQty;
+      totalDailyTarget += r.dailyTargetQty ?? 0;
+    }
+    return {
+      pgCount: pgSummaryRows.length,
+      totalOrderQty,
+      totalCutQty,
+      totalDailyTarget,
+    };
+  }, [pgSummaryRows]);
+
   return (
     <div className="space-y-6">
-      {/* Top Form: Daily Cutting Entry */}
+      {/* Online Cutting Sheet Auto-Sync & Excel Upload Card */}
+      <div className="bg-slate-900 text-white border border-slate-800 rounded-xl p-5 shadow-xs space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center shrink-0">
+              <FileSpreadsheet className="w-5 h-5 text-blue-300" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-display text-base font-bold text-white">
+                  Online Sheet Auto-Sync &amp; .xlsx File Upload (Zero Manual Entry)
+                </h2>
+                <span
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${
+                    cuttingSheetSync.enabled
+                      ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-200'
+                      : 'bg-slate-700/60 border-slate-600 text-slate-300'
+                  }`}
+                >
+                  {cuttingSheetSync.enabled ? 'Auto-Sync Active' : 'Auto-Sync Paused'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 mt-1 max-w-3xl">
+                Supports <strong className="text-white">SharePoint / OneDrive Excel links</strong>, <strong className="text-white">Google Sheets links</strong>, or direct <strong className="text-white">.xlsx / .csv file upload</strong>. Automatically reads PG# follow-up tabs (<code className="text-blue-200">Daily Cutting</code>) as well as standard summary tables across ALEX 1, 3, 5, and 12.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDownloadSampleTemplate}
+              className="h-9 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Sample Template (.csv)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const nextVal = !sheetEnabled;
+                setSheetEnabled(nextVal);
+                void handleSaveSheetSetup(nextVal);
+              }}
+              className={`h-9 px-3.5 rounded-lg text-xs font-semibold border cursor-pointer transition-colors ${
+                sheetEnabled
+                  ? 'bg-emerald-600 hover:bg-emerald-700 border-emerald-500 text-white'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-200'
+              }`}
+            >
+              {sheetEnabled ? 'Auto-Sync: ON' : 'Auto-Sync: OFF'}
+            </button>
+          </div>
+        </div>
+
+        {/* 4-Factory Auto-Sync Links + Schedule Controls */}
+        <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-3.5 space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+              <Link2 className="w-3.5 h-3.5 text-blue-300" />
+              <span>4 Factory Online Sheet Links (Save Once — Auto-Checked on Schedule)</span>
+            </div>
+            <span className="text-[11px] text-slate-400">
+              Each factory syncs independently so other factories&apos; data is always preserved
+            </span>
+          </div>
+
+          {/* 4 Separate Factory Link Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {ALLOWED_FACTORIES.map((fac) => {
+              const liveStats = perFactorySyncedStats[fac];
+              const facStatus = cuttingSheetSync.factoryStatuses?.[fac];
+              const hasSavedLink = Boolean(
+                (factoryUrlsInput[fac] || '').trim() ||
+                  (cuttingSheetSync.factoryUrls?.[fac] || '').trim()
+              );
+              return (
+                <div
+                  key={fac}
+                  className="bg-slate-900/75 border border-slate-800 rounded-lg p-2.5 flex flex-col gap-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <label
+                      htmlFor={`fac-url-${fac}`}
+                      className="text-xs font-semibold text-white flex items-center gap-1.5"
+                    >
+                      <span className="px-1.5 py-0.5 rounded bg-blue-500/20 border border-blue-400/30 text-blue-200 font-mono text-[11px]">
+                        {fac}
+                      </span>
+                      <span className="text-slate-300 font-normal">Online Sheet Link</span>
+                    </label>
+                    {facStatus?.status === 'Error' ? (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-900/60 border border-red-700/60 text-red-200">
+                        Link Error
+                      </span>
+                    ) : liveStats.count > 0 ? (
+                      <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-emerald-900/60 border border-emerald-700/60 text-emerald-200">
+                        {liveStats.count} entries · {liveStats.qty.toLocaleString()} pcs
+                      </span>
+                    ) : hasSavedLink ? (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
+                        Linked · Pending Sync
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-500">Not linked</span>
+                    )}
+                  </div>
+                  <input
+                    id={`fac-url-${fac}`}
+                    type="url"
+                    value={factoryUrlsInput[fac] || ''}
+                    onChange={(e) =>
+                      setFactoryUrlsInput((prev) => ({
+                        ...prev,
+                        [fac]: e.target.value,
+                      }))
+                    }
+                    placeholder={`Paste ${fac} SharePoint / OneDrive / Google Sheet URL`}
+                    className="h-9 px-2.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {facStatus?.message && (
+                    <div
+                      className={`text-[11px] truncate ${
+                        facStatus.status === 'Error' ? 'text-red-300' : 'text-slate-400'
+                      }`}
+                      title={facStatus.message}
+                    >
+                      {facStatus.message}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Schedule + Format + Save/Sync Actions */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 pt-1 items-end">
+            <div className="lg:col-span-3 flex flex-col gap-1">
+              <label htmlFor="sheet-sync-interval" className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">
+                Auto-Check Schedule
+              </label>
+              <select
+                id="sheet-sync-interval"
+                value={intervalInput}
+                onChange={(e) => setIntervalInput(Number(e.target.value))}
+                className="h-9 px-3 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                {CUTTING_SYNC_INTERVAL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="lg:col-span-4 flex flex-col gap-1">
+              <label htmlFor="sheet-sync-mode" className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">
+                Sheet Data Format
+              </label>
+              <select
+                id="sheet-sync-mode"
+                value={syncModeInput}
+                onChange={(e) => setSyncModeInput(e.target.value as CuttingSheetSyncMode)}
+                className="h-9 px-3 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="auto">Auto-Detect (PG# Tabs, Daily Rows, or Date Columns)</option>
+                <option value="daily_rows">Daily Rows (Date + PG# + Cutting Qty)</option>
+                <option value="cumulative_pg">PG# Summary Total (Cumulative Qty)</option>
+              </select>
+            </div>
+
+            <div className="lg:col-span-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void handleSaveSheetSetup()}
+                disabled={savingConfig || syncingNow}
+                className="h-9 px-3.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{savingConfig ? 'Saving...' : 'Save Links'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleTriggerSyncNow()}
+                disabled={syncingNow || savingConfig}
+                className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${syncingNow ? 'animate-spin' : ''}`} />
+                <span>{syncingNow ? 'Syncing All Links...' : 'Save Links & Sync Now'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Optional Single Combined Sheet Link */}
+          <div className="pt-2 border-t border-slate-800/80 space-y-2">
+            <button
+              type="button"
+              onClick={() => setShowMainUrl((v) => !v)}
+              className="text-xs font-medium text-blue-300 hover:text-blue-200 inline-flex items-center gap-1 cursor-pointer"
+            >
+              {showMainUrl ? (
+                <ChevronUp className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronDown className="w-3.5 h-3.5" />
+              )}
+              <span>Combined Master Cutting Sheet Link (Optional — if 1 file covers all 4 factories)</span>
+            </button>
+
+            {showMainUrl && (
+              <div className="flex flex-col gap-1">
+                <label htmlFor="online-sheet-url" className="text-[11px] font-medium text-slate-300">
+                  Single Combined Online Excel / Google Sheet URL
+                </label>
+                <input
+                  id="online-sheet-url"
+                  type="url"
+                  value={sheetUrlInput}
+                  onChange={(e) => setSheetUrlInput(e.target.value)}
+                  placeholder="https://...-my.sharepoint.com/:x:/... or https://docs.google.com/spreadsheets/d/..."
+                  className="h-9 px-3 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Direct .xlsx / .csv Cutting File Upload Bar */}
+        <div className="bg-slate-950/55 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="text-xs font-semibold text-white flex items-center gap-2">
+                <Upload className="w-3.5 h-3.5 text-emerald-300" />
+                <span>Direct .xlsx / .csv Cutting Sheet Upload (Per-Factory Merge)</span>
+              </div>
+              <p className="text-[11px] text-slate-300">
+                Uploading a factory workbook (e.g. <code className="text-blue-200">Alex-3 Followup updated sheet.xlsx</code>) updates <strong className="text-white">only that factory</strong> — all other factories&apos; data stays preserved.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Factory scope for uploaded file"
+                value={uploadFactoryOverride}
+                onChange={(e) => setUploadFactoryOverride(e.target.value as FactoryName | 'AUTO')}
+                className="h-9 px-2.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="AUTO">Factory: Auto-Detect</option>
+                {ALLOWED_FACTORIES.map((f) => (
+                  <option key={f} value={f}>
+                    Factory: {f}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                ref={cuttingFileInputRef}
+                type="file"
+                accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                onChange={handleCuttingFileInputChange}
+                className="hidden"
+              />
+
+              <button
+                type="button"
+                onClick={() => cuttingFileInputRef.current?.click()}
+                disabled={uploadingFile || syncingNow}
+                className="h-9 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+              >
+                <Upload className={`w-3.5 h-3.5 ${uploadingFile ? 'animate-bounce' : ''}`} />
+                <span>{uploadingFile ? 'Importing .xlsx...' : 'Upload .xlsx / .csv File'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800/70 text-[11px]">
+            <span className="text-slate-400">Saved by Factory:</span>
+            {ALLOWED_FACTORIES.map((fac) => {
+              const st = perFactorySyncedStats[fac];
+              return (
+                <span
+                  key={fac}
+                  className={`px-2 py-0.5 rounded border font-mono ${
+                    st.count > 0
+                      ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-200'
+                      : 'bg-slate-900/80 border-slate-800 text-slate-400'
+                  }`}
+                >
+                  {fac}: {st.qty.toLocaleString()} pcs ({st.count})
+                </span>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Sharing Guide & Live Sync Status Strip */}
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-950/40 border border-slate-800/80 rounded-xl px-3.5 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+            <span className="inline-flex items-center gap-1.5">
+              {cuttingSheetSync.lastStatus === 'Error' ? (
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              )}
+              <span className="text-slate-300">Status:</span>
+              <span className="font-semibold text-white">{cuttingSheetSync.lastStatus}</span>
+            </span>
+            <span className="text-slate-300">
+              Synced Entries:{' '}
+              <strong className="font-mono text-white">
+                {sheetSyncedCount.toLocaleString()}
+              </strong>
+            </span>
+            <span className="text-slate-300">
+              Synced Qty:{' '}
+              <strong className="font-mono text-emerald-300">
+                {cuttingSheetSync.lastTotalQty.toLocaleString()} pcs
+              </strong>
+            </span>
+            {cuttingSheetSync.lastCheckedAtIso && (
+              <span className="text-slate-400">
+                Last Checked:{' '}
+                <span className="font-mono text-slate-200">
+                  {new Date(cuttingSheetSync.lastCheckedAtIso).toLocaleString()}
+                </span>
+              </span>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowSyncLogs((v) => !v)}
+            className="text-xs font-medium text-slate-300 hover:text-white cursor-pointer"
+          >
+            {showSyncLogs ? 'Hide Sync Logs' : `View Sync Logs (${cuttingSheetSync.logs.length})`}
+          </button>
+        </div>
+
+        <div className="text-[11px] text-slate-300 flex flex-wrap items-center justify-between gap-2">
+          <span>
+            Online Link Tip: Works with <strong className="text-white">SharePoint / OneDrive Excel</strong> (<code className="bg-slate-800 px-1.5 py-0.5 rounded text-blue-200">Anyone with the link</code>) and <strong className="text-white">Google Sheets</strong>. Automatically fills <strong className="text-white">PG# Order Qty</strong>, pulls the <strong className="text-white">Latest Updated Total Cutting Qty</strong> per PG#, and updates <strong className="text-white">Daily Target</strong> by latest date.
+          </span>
+        </div>
+
+        {(syncNotice || cuttingSheetSync.lastMessage) && (
+          <div
+            className={`px-3.5 py-2.5 rounded-xl border text-xs flex items-center justify-between gap-3 ${
+              syncNotice
+                ? syncNotice.ok
+                  ? 'bg-emerald-950/60 border-emerald-700/70 text-emerald-200'
+                  : 'bg-red-950/60 border-red-700/70 text-red-200'
+                : cuttingSheetSync.lastStatus === 'Error'
+                  ? 'bg-amber-950/50 border-amber-700/60 text-amber-200'
+                  : 'bg-slate-900/70 border-slate-700 text-slate-200'
+            }`}
+          >
+            <span>{syncNotice ? syncNotice.text : cuttingSheetSync.lastMessage}</span>
+            {syncNotice && (
+              <button
+                type="button"
+                onClick={() => setSyncNotice(null)}
+                className="text-slate-300 hover:text-white text-[11px] font-semibold shrink-0 cursor-pointer"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
+
+        {showSyncLogs && (
+          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 space-y-2 max-h-64 overflow-y-auto">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              Recent Sheet Sync History
+            </div>
+            {cuttingSheetSync.logs.length === 0 ? (
+              <div className="text-xs text-slate-400 py-2">No sync runs logged yet.</div>
+            ) : (
+              cuttingSheetSync.logs.map((log) => (
+                <div
+                  key={log.id}
+                  className="text-xs border-b border-slate-800/80 last:border-b-0 pb-2 last:pb-0 flex flex-col gap-1"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                          log.status === 'Error'
+                            ? 'bg-red-900/70 text-red-200'
+                            : log.status === 'Updated'
+                              ? 'bg-emerald-900/70 text-emerald-200'
+                              : 'bg-blue-900/70 text-blue-200'
+                        }`}
+                      >
+                        {log.trigger} · {log.status}
+                      </span>
+                      <span className="text-slate-200">{log.message}</span>
+                    </div>
+                    <span className="font-mono text-[11px] text-slate-400">
+                      {new Date(log.syncedAtIso).toLocaleString()}
+                    </span>
+                  </div>
+                  {log.sampleUnmatched && log.sampleUnmatched.length > 0 && (
+                    <div className="text-[11px] text-amber-300">
+                      Unmatched PG# samples: {log.sampleUnmatched.join(', ')}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* PG-Wise Latest Cutting, Auto-Filled Order Qty & Daily Target Summary */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+        <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/60">
+          <div>
+            <h3 className="font-display text-sm font-semibold text-slate-900">
+              PG-Wise Latest Cutting, Order Qty &amp; Daily Target ({pgTotalsSummary.pgCount} PG#)
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Auto-filled from your uploaded / linked sheet: Order Qty:{' '}
+              <span className="font-mono font-semibold text-slate-900">
+                {pgTotalsSummary.totalOrderQty.toLocaleString()}
+              </span>{' '}
+              pcs · Latest Total Cut:{' '}
+              <span className="font-mono font-semibold text-teal-700">
+                {pgTotalsSummary.totalCutQty.toLocaleString()}
+              </span>{' '}
+              pcs · Daily Target Sum:{' '}
+              <span className="font-mono font-semibold text-blue-700">
+                {pgTotalsSummary.totalDailyTarget.toLocaleString()}
+              </span>{' '}
+              /day
+            </p>
+          </div>
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg text-xs">
+            <button
+              type="button"
+              onClick={() => setPgScopeFilter('synced_or_filled')}
+              className={`px-2.5 py-1 rounded-md font-medium cursor-pointer transition-colors ${
+                pgScopeFilter === 'synced_or_filled'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Synced / Active PGs
+            </button>
+            <button
+              type="button"
+              onClick={() => setPgScopeFilter('all')}
+              className={`px-2.5 py-1 rounded-md font-medium cursor-pointer transition-colors ${
+                pgScopeFilter === 'all'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              All Plan PGs
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
+                <th className="py-2.5 px-3.5 whitespace-nowrap">Factory</th>
+                <th className="py-2.5 px-3.5 whitespace-nowrap">PG #</th>
+                <th className="py-2.5 px-3.5 whitespace-nowrap">Style · Lines</th>
+                <th className="py-2.5 px-3.5 whitespace-nowrap">Latest Update Date</th>
+                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Order Qty (PG)</th>
+                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Latest Total Cutting</th>
+                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Balance to Cut</th>
+                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Daily Target</th>
+                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Days Left</th>
+                <th className="py-2.5 px-3.5 whitespace-nowrap">Source</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 text-xs">
+              {pgSummaryRows.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="py-8 text-center text-slate-500">
+                    No PG-wise cutting or order qty synced yet for this filter. Upload an .xlsx / .csv file or sync an online link above.
+                  </td>
+                </tr>
+              ) : (
+                pgSummaryRows.map((row) => {
+                  const balance =
+                    row.orderQty !== null
+                      ? Math.max(0, row.orderQty - row.cuttingFinishedQty)
+                      : null;
+                  const daysLeft =
+                    balance !== null && row.dailyTargetQty !== null && row.dailyTargetQty > 0
+                      ? Math.ceil(balance / row.dailyTargetQty)
+                      : balance === 0
+                        ? 0
+                        : null;
+                  const alert10d = daysLeft !== null && daysLeft <= 10 && !row.allClosed;
+                  return (
+                    <tr key={row.key} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-2.5 px-3.5 whitespace-nowrap font-semibold text-slate-900">
+                        {row.factory}
+                      </td>
+                      <td className="py-2.5 px-3.5 whitespace-nowrap font-mono font-bold text-blue-700">
+                        {row.pgNumber}
+                      </td>
+                      <td className="py-2.5 px-3.5 min-w-[200px] max-w-[280px]">
+                        <div className="font-medium text-slate-900 truncate" title={row.style}>
+                          {row.style}
+                        </div>
+                        <div className="text-[11px] text-slate-500 truncate">
+                          {row.lines.join(', ')}
+                          {row.hasRunning ? ' · Running' : ''}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3.5 font-mono tabular-nums whitespace-nowrap text-slate-700">
+                        {row.latestDateIso ? formatDisplayDate(row.latestDateIso) : '—'}
+                      </td>
+                      <td className="py-2.5 px-3.5 text-right whitespace-nowrap">
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="Pending"
+                          value={row.orderQty === null ? '' : row.orderQty}
+                          onChange={(e) => {
+                            const raw = e.target.value.trim();
+                            const nextVal = raw === '' ? null : Number(raw);
+                            for (const rid of row.recordIds) {
+                              onUpdateRecord(rid, { plannedQty: nextVal });
+                            }
+                          }}
+                          aria-label={`PG Order Qty for ${row.pgNumber}`}
+                          className={`w-24 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border focus:outline-none focus:ring-2 focus:ring-blue-600 ${
+                            row.orderQty === null
+                              ? 'bg-amber-50/70 border-amber-300 placeholder:text-amber-700/70'
+                              : 'bg-white border-slate-300 font-semibold text-slate-900'
+                          }`}
+                        />
+                      </td>
+                      <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-bold text-teal-700 whitespace-nowrap">
+                        {row.cuttingFinishedQty.toLocaleString()}
+                      </td>
+                      <td className="py-2.5 px-3.5 text-right font-mono tabular-nums text-slate-700 whitespace-nowrap">
+                        {balance !== null ? balance.toLocaleString() : '—'}
+                      </td>
+                      <td className="py-2.5 px-3.5 text-right whitespace-nowrap">
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="Target/d"
+                          value={row.dailyTargetQty === null ? '' : row.dailyTargetQty}
+                          onChange={(e) => {
+                            const raw = e.target.value.trim();
+                            const nextVal = raw === '' ? null : Number(raw);
+                            for (const rid of row.recordIds) {
+                              onUpdateRecord(rid, { dailyTargetQty: nextVal });
+                            }
+                          }}
+                          aria-label={`PG Daily Target for ${row.pgNumber}`}
+                          className="w-20 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border border-slate-300 bg-white font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        />
+                      </td>
+                      <td
+                        className={`py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap ${
+                          alert10d ? 'text-red-700 font-bold' : 'text-slate-700'
+                        }`}
+                      >
+                        {daysLeft !== null ? `${daysLeft}d` : '—'}
+                      </td>
+                      <td className="py-2.5 px-3.5 whitespace-nowrap">
+                        {row.hasSheet ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-semibold">
+                            Sheet Latest
+                          </span>
+                        ) : row.cuttingFinishedQty > 0 ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-medium">
+                            Manual
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-medium">
+                            Order Filled
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Top Form: Manual Cutting Entry (Optional Adjustment) */}
       <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-display text-sm font-semibold text-slate-900">
-              Daily-Wise Cutting Qty Data Entry
+              {cuttingSheetSync.enabled
+                ? 'Manual Cutting Entry (Optional Adjustment — Auto-Sync Active Above)'
+                : 'Daily-Wise Cutting Qty Data Entry'}
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
               Entries recorded here auto-sum into Cutting Finished Qty in Fabric Order Tracker. Set Order Status to &ldquo;Order Closed&rdquo; when a PG completes.
             </p>
           </div>
           {targetRecord && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {targetRecord.lifecycleStage !== 'Running' &&
+                targetRecord.orderStatus !== 'Order Closed' && (
+                  <button
+                    type="button"
+                    onClick={() => onSetRunningStyle(targetRecord.id)}
+                    className="h-9 px-3 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 text-xs font-semibold cursor-pointer"
+                  >
+                    Set as Running Style
+                  </button>
+                )}
               <label htmlFor="form-order-status" className="text-xs font-medium text-slate-600">
                 Order Status:
               </label>
@@ -497,6 +1459,7 @@ export function DailyCuttingEntryView({
                 <th className="py-2.5 px-3.5">PG #</th>
                 <th className="py-2.5 px-3.5">Style</th>
                 <th className="py-2.5 px-3.5 text-right">Cutting Qty</th>
+                <th className="py-2.5 px-3.5">Source</th>
                 <th className="py-2.5 px-3.5">Remarks</th>
                 <th className="py-2.5 px-3.5 text-center">Remove</th>
               </tr>
@@ -504,8 +1467,8 @@ export function DailyCuttingEntryView({
             <tbody className="divide-y divide-slate-200 text-xs">
               {cuttingEntries.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-500">
-                    No daily cutting entries logged yet. Use the form or quick-entry sheet above to log daily cutting qty.
+                  <td colSpan={8} className="py-8 text-center text-slate-500">
+                    No daily cutting entries logged yet. Link an Online Sheet above for automatic updates, or use the manual form.
                   </td>
                 </tr>
               ) : (
@@ -525,6 +1488,17 @@ export function DailyCuttingEntryView({
                     </td>
                     <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-semibold text-teal-700">
                       +{entry.cuttingQty.toLocaleString()}
+                    </td>
+                    <td className="py-2.5 px-3.5 whitespace-nowrap">
+                      {entry.source === 'sheet' ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-semibold">
+                          Sheet Auto-Sync
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-medium">
+                          Manual
+                        </span>
+                      )}
                     </td>
                     <td className="py-2.5 px-3.5 text-slate-500">{entry.remarks || '—'}</td>
                     <td className="py-2.5 px-3.5 text-center">

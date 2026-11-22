@@ -17,6 +17,7 @@ export interface PlanningRecord {
   productCategory: string;
   slot: number;
   isCurrentStyle: boolean;
+  isManualRunning?: boolean;
   isFinished: boolean;
   orderStatus: OrderStatus;
   pgNumber: string;
@@ -36,6 +37,12 @@ export interface PlanningRecord {
   foDate: string;
   foStatus: FoStatus;
   fabricNote: string;
+  foChecklistConfirmed?: boolean;
+  foChecklistConfirmedAtIso?: string | null;
+  upcomingFoSelected?: boolean;
+  upcomingFoSelectedAtIso?: string | null;
+  sheetRemark?: string;
+  foFullQtyReleased?: boolean;
 }
 
 export interface DailyCuttingEntry {
@@ -48,10 +55,15 @@ export interface DailyCuttingEntry {
   style: string;
   cuttingQty: number;
   remarks: string;
+  source?: 'manual' | 'sheet';
 }
 
 export interface EvaluatedPlanningRecord extends PlanningRecord {
   lifecycleStage: LineLifecycleStage;
+  effectiveIssueQty: number | null;
+  isFullQtyReleased: boolean;
+  newStyleOutputStartIso: string | null;
+  daysToNewStyleOutputStart: number | null;
   cuttingFinishedQty: number;
   cuttingRemainingQty: number | null;
   cuttingDaysRemaining: number | null;
@@ -74,14 +86,59 @@ export interface LineShortcutSummary {
   productCategory: string;
   runningRecord: EvaluatedPlanningRecord | null;
   upcomingRecord: EvaluatedPlanningRecord | null;
-  newStyleInputStartIso: string | null; // Running End Date - 10 Days
-  upcomingFoTriggerIso: string | null; // Input Start Date - 20 Days (= Running End Date - 30 Days)
+  newStyleOutputStartIso: string | null; // Running End Date + 1 Day (when new style starts output)
+  daysToNewStyleOutputStart: number | null;
+  newStyleInputStartIso: string | null; // Running End Date - inputOffset Days
+  daysToNewStyleInputStart: number | null; // Remaining days from referenceDateIso to New Style Input Start
+  upcomingFoTriggerIso: string | null; // Input Start Date - foOffset Days (default 15D)
   daysToUpcomingFoTrigger: number | null;
   cuttingAlertActive: boolean; // Cutting <= 10 days left on running style
-  upcomingFoAlertActive: boolean; // Upcoming FO trigger <= 0 or <= 15 days
+  upcomingFoAlertActive: boolean; // Upcoming FO trigger <= 0
+  hasManualRunning: boolean;
+  hasActionableUpcomingFo: boolean;
   foNeedReason: string;
-  summaryStatus: 'FO REQUIRED NOW' | 'CUTTING <= 10D · FO NEEDED' | 'FO DUE SOON' | 'ON SCHEDULE' | 'NO UPCOMING PLAN';
+  summaryStatus:
+    | 'FO REQUIRED NOW'
+    | 'CUTTING <= 10D · FO NEEDED'
+    | 'FO DUE SOON'
+    | 'ON SCHEDULE'
+    | 'NO UPCOMING PLAN'
+    | 'SET RUNNING STYLE';
   summarySeverity: 'critical' | 'warning' | 'upcoming' | 'normal';
+}
+
+export interface PgFoChecklistItem {
+  key: string;
+  factory: FactoryName;
+  pgNumber: string;
+  style: string;
+  stageTag: 'RUNNING ORDER' | 'UPCOMING ORDER';
+  lines: string[];
+  totalCapacityMc: number;
+  orderQty: number | null;
+  issueQty: number | null;
+  runningEndIso: string | null;
+  newStyleOutputStartIso: string | null; // Running End + 1D
+  daysToNewStyleOutputStart: number | null;
+  inputStartIso: string | null;
+  daysToInputStart: number | null;
+  foTriggerIso: string | null;
+  daysToFoTrigger: number | null;
+  foStatus: FoStatus;
+  foNumber: string;
+  isFullQtyReleased: boolean;
+  sheetRemark: string;
+  cuttingFinishedQty: number;
+  cuttingDaysRemaining: number | null;
+  cuttingAlertActive: boolean;
+  needsFo: boolean;
+  isActionableWindow: boolean;
+  statusLabel: string;
+  reasonLabel: string;
+  severity: 'released' | 'critical' | 'warning' | 'upcoming' | 'normal';
+  primaryRecord: EvaluatedPlanningRecord;
+  recordIds: string[];
+  allSelected: boolean;
 }
 
 export interface MasterPlanMeta {
@@ -466,7 +523,8 @@ export function parseMasterPlanCsv(csvText: string): ParsedMasterPlan {
             capacityMc: col.capacityMc,
             productCategory: col.productCategory,
             slot: item.slot,
-            isCurrentStyle: item.slot === 1,
+            isCurrentStyle: false,
+            isManualRunning: false,
             isFinished: false,
             orderStatus: 'Open',
             pgNumber: extractPgNumber(item.style),
@@ -486,6 +544,12 @@ export function parseMasterPlanCsv(csvText: string): ParsedMasterPlan {
             foDate: '',
             foStatus: 'Pending',
             fabricNote: '',
+            foChecklistConfirmed: false,
+            foChecklistConfirmedAtIso: null,
+            upcomingFoSelected: false,
+            upcomingFoSelectedAtIso: null,
+            sheetRemark: '',
+            foFullQtyReleased: false,
           });
         }
       }
@@ -515,12 +579,53 @@ export function parseMasterPlanCsv(csvText: string): ParsedMasterPlan {
   };
 }
 
+export function detectFullQtyReleasedFromText(text: string): boolean {
+  const clean = (text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return false;
+  if (
+    /\b(not\s+released|unreleased|pending|partial(?:ly)?\s*(?:released|issued)?|on\s+hold|waiting|balance\s+due)\b/i.test(
+      clean
+    )
+  ) {
+    return false;
+  }
+  return /(full\s*(?:qty|qnty|quantity|fo|fabric)?\s*(?:is\s*|are\s*)?(?:released|issued|ok|done|complete|completed|received)|100%\s*(?:fo\s*|qty\s*)?(?:released|issued|received)|fo\s*(?:complete|completed|released|full|done)|all\s*(?:fabric|qty)\s*(?:released|issued)|\bin[\s-]*house\b)/i.test(
+    clean
+  );
+}
+
+export function getEffectiveIssueQty(
+  rec: Pick<PlanningRecord, 'plannedQty' | 'foIssueQty'>
+): number | null {
+  if (rec.foIssueQty !== null && rec.foIssueQty !== undefined && !Number.isNaN(rec.foIssueQty)) {
+    return rec.foIssueQty;
+  }
+  if (rec.plannedQty !== null && rec.plannedQty !== undefined && !Number.isNaN(rec.plannedQty)) {
+    return rec.plannedQty;
+  }
+  return null;
+}
+
 export function buildCuttingTotalsMap(
   cuttingEntries: DailyCuttingEntry[]
 ): Map<string, number> {
   const map = new Map<string, number>();
   for (const entry of cuttingEntries) {
     map.set(entry.recordId, (map.get(entry.recordId) ?? 0) + (entry.cuttingQty || 0));
+  }
+  return map;
+}
+
+export function buildPgSheetCuttingTotalsMap(
+  cuttingEntries: DailyCuttingEntry[]
+): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const entry of cuttingEntries) {
+    if (entry.source !== 'sheet') continue;
+    const pg = (entry.pgNumber || '').trim().toUpperCase();
+    if (!pg || pg === '—') continue;
+    const key = `${entry.factory}::${pg}`;
+    map.set(key, Math.max(map.get(key) ?? 0, entry.cuttingQty || 0));
   }
   return map;
 }
@@ -539,19 +644,28 @@ export function computeLineLifecycleMap(
   const stageMap = new Map<string, LineLifecycleStage>();
   for (const list of grouped.values()) {
     const sorted = [...list].sort((a, b) => a.slot - b.slot);
-    let activeOrderCount = 0;
+    const manualRunning = sorted.find(
+      (item) =>
+        Boolean(item.isManualRunning) &&
+        item.orderStatus !== 'Order Closed' &&
+        !item.isFinished
+    );
+
+    let upcomingAssigned = false;
     for (const item of sorted) {
       if (item.orderStatus === 'Order Closed' || item.isFinished) {
         stageMap.set(item.id, 'Order Closed');
-      } else if (activeOrderCount === 0) {
+      } else if (manualRunning && item.id === manualRunning.id) {
         stageMap.set(item.id, 'Running');
-        activeOrderCount++;
-      } else if (activeOrderCount === 1) {
+      } else if (
+        manualRunning &&
+        !upcomingAssigned &&
+        item.slot > manualRunning.slot
+      ) {
         stageMap.set(item.id, 'Upcoming (Next)');
-        activeOrderCount++;
+        upcomingAssigned = true;
       } else {
         stageMap.set(item.id, 'Queued');
-        activeOrderCount++;
       }
     }
   }
@@ -573,25 +687,59 @@ export function evaluatePlanningRecords(
 ): EvaluatedPlanningRecord[] {
   const inputOffset = Math.max(1, options.inputStartOffsetDays ?? 10);
   const cuttingAlertLimit = Math.max(1, options.cuttingAlertDays ?? 10);
-  const cuttingTotals = buildCuttingTotalsMap(cuttingEntries);
+  const directManualTotals = new Map<string, number>();
+  const directSheetTotals = new Map<string, number>();
+  for (const entry of cuttingEntries) {
+    if (entry.source === 'sheet') {
+      directSheetTotals.set(
+        entry.recordId,
+        (directSheetTotals.get(entry.recordId) ?? 0) + (entry.cuttingQty || 0)
+      );
+    } else {
+      directManualTotals.set(
+        entry.recordId,
+        (directManualTotals.get(entry.recordId) ?? 0) + (entry.cuttingQty || 0)
+      );
+    }
+  }
+  const pgSheetTotals = buildPgSheetCuttingTotalsMap(cuttingEntries);
   const lifecycleMap = computeLineLifecycleMap(records);
 
   return records.map((record) => {
-    const lifecycleStage = lifecycleMap.get(record.id) ?? (record.slot === 1 ? 'Running' : 'Queued');
+    const lifecycleStage = lifecycleMap.get(record.id) ?? 'Queued';
     const isCurrentStyle = lifecycleStage === 'Running';
     const triggerDateIso = addDaysIso(record.endDateIso, -inputOffset);
     const daysToEnd = diffDaysIso(record.endDateIso, referenceDateIso);
     const daysToTrigger = diffDaysIso(triggerDateIso, referenceDateIso);
 
-    const cuttingFinishedQty =
-      (record.cuttingBaseQty ?? 0) + (cuttingTotals.get(record.id) ?? 0);
+    const isOrderClosed = record.orderStatus === 'Order Closed' || record.isFinished;
+    const effectiveIssueQty = getEffectiveIssueQty(record);
+    const isFullQtyReleased =
+      !isOrderClosed &&
+      (Boolean(record.foFullQtyReleased) ||
+        record.foStatus === 'In-House' ||
+        detectFullQtyReleasedFromText(record.sheetRemark || '') ||
+        detectFullQtyReleasedFromText(record.fabricNote || ''));
+
+    // New Style Output starts 1 day after order end date (e.g., running ends 25 Nov -> output starts 26 Nov)
+    const newStyleOutputStartIso = addDaysIso(record.endDateIso, 1);
+    const daysToNewStyleOutputStart = diffDaysIso(newStyleOutputStartIso, referenceDateIso);
+
+    const directManual = directManualTotals.get(record.id) ?? 0;
+    const directSheet = directSheetTotals.get(record.id) ?? 0;
+    const pgKey =
+      record.pgNumber && record.pgNumber !== '—'
+        ? `${record.factory}::${record.pgNumber.toUpperCase()}`
+        : '';
+    const pgSheet = pgKey && !isOrderClosed ? (pgSheetTotals.get(pgKey) ?? 0) : 0;
+    const effectiveSheet = directSheet > 0 ? directSheet : pgSheet;
+
+    const cuttingFinishedQty = (record.cuttingBaseQty ?? 0) + directManual + effectiveSheet;
 
     let cuttingRemainingQty: number | null = null;
     let cuttingDaysRemaining: number | null = null;
     let estimatedCuttingFinishIso: string | null = null;
     let isCuttingWithin10Days = false;
-
-    const isOrderClosed = record.orderStatus === 'Order Closed' || record.isFinished;
 
     if (record.plannedQty !== null && record.plannedQty > 0) {
       cuttingRemainingQty = Math.max(0, record.plannedQty - cuttingFinishedQty);
@@ -613,21 +761,31 @@ export function evaluatePlanningRecords(
       record.plannedQty === undefined ||
       Number.isNaN(record.plannedQty);
 
+    const commonExtras = {
+      isCurrentStyle,
+      triggerDateIso,
+      lifecycleStage,
+      effectiveIssueQty,
+      isFullQtyReleased,
+      newStyleOutputStartIso,
+      daysToNewStyleOutputStart,
+      cuttingFinishedQty,
+      cuttingRemainingQty,
+      cuttingDaysRemaining,
+      estimatedCuttingFinishIso,
+      isCuttingWithin10Days,
+      daysToEnd,
+      daysToTrigger,
+    };
+
     if (isOrderClosed) {
       return {
         ...record,
+        ...commonExtras,
         isFinished: true,
         orderStatus: 'Order Closed',
-        isCurrentStyle,
-        triggerDateIso,
         lifecycleStage: 'Order Closed',
-        cuttingFinishedQty,
-        cuttingRemainingQty,
-        cuttingDaysRemaining,
-        estimatedCuttingFinishIso,
         isCuttingWithin10Days: false,
-        daysToEnd,
-        daysToTrigger,
         foRequired: false,
         actionRequired: false,
         actionMessage: 'ORDER CLOSED',
@@ -636,19 +794,25 @@ export function evaluatePlanningRecords(
       };
     }
 
+    if (isFullQtyReleased) {
+      const remarkDetail = (record.sheetRemark || record.fabricNote || '').trim();
+      return {
+        ...record,
+        ...commonExtras,
+        foRequired: false,
+        actionRequired: false,
+        actionMessage: remarkDetail
+          ? `FULL QTY RELEASED — ${remarkDetail}`
+          : 'FULL QTY RELEASED - FABRIC COMPLETE',
+        riskStatus: 'FULL QTY RELEASED',
+        riskTier: 'on_track',
+      };
+    }
+
     if (isPlannedQtyBlank) {
       return {
         ...record,
-        isCurrentStyle,
-        triggerDateIso,
-        lifecycleStage,
-        cuttingFinishedQty,
-        cuttingRemainingQty,
-        cuttingDaysRemaining,
-        estimatedCuttingFinishIso,
-        isCuttingWithin10Days,
-        daysToEnd,
-        daysToTrigger,
+        ...commonExtras,
         foRequired: true,
         actionRequired: true,
         actionMessage: 'FO NEED - TAKE ACTION AS PER PLAN',
@@ -660,16 +824,7 @@ export function evaluatePlanningRecords(
     if (isCuttingWithin10Days && record.foStatus === 'Pending') {
       return {
         ...record,
-        isCurrentStyle,
-        triggerDateIso,
-        lifecycleStage,
-        cuttingFinishedQty,
-        cuttingRemainingQty,
-        cuttingDaysRemaining,
-        estimatedCuttingFinishIso,
-        isCuttingWithin10Days,
-        daysToEnd,
-        daysToTrigger,
+        ...commonExtras,
         foRequired: true,
         actionRequired: true,
         actionMessage: `CUTTING FINISH IN ${cuttingDaysRemaining}D — FABRIC ORDER NEEDED`,
@@ -678,41 +833,11 @@ export function evaluatePlanningRecords(
       };
     }
 
-    if (record.foStatus === 'In-House') {
-      return {
-        ...record,
-        isCurrentStyle,
-        triggerDateIso,
-        lifecycleStage,
-        cuttingFinishedQty,
-        cuttingRemainingQty,
-        cuttingDaysRemaining,
-        estimatedCuttingFinishIso,
-        isCuttingWithin10Days,
-        daysToEnd,
-        daysToTrigger,
-        foRequired: false,
-        actionRequired: false,
-        actionMessage: 'FABRIC IN-HOUSE - READY FOR LINE',
-        riskStatus: 'ON TRACK',
-        riskTier: 'on_track',
-      };
-    }
-
     if (record.foStatus === 'FO Raised') {
       const overdue = daysToTrigger !== null && daysToTrigger <= 0;
       return {
         ...record,
-        isCurrentStyle,
-        triggerDateIso,
-        lifecycleStage,
-        cuttingFinishedQty,
-        cuttingRemainingQty,
-        cuttingDaysRemaining,
-        estimatedCuttingFinishIso,
-        isCuttingWithin10Days,
-        daysToEnd,
-        daysToTrigger,
+        ...commonExtras,
         foRequired: false,
         actionRequired: overdue,
         actionMessage: overdue
@@ -726,16 +851,7 @@ export function evaluatePlanningRecords(
     if (record.foStatus === 'Delayed') {
       return {
         ...record,
-        isCurrentStyle,
-        triggerDateIso,
-        lifecycleStage,
-        cuttingFinishedQty,
-        cuttingRemainingQty,
-        cuttingDaysRemaining,
-        estimatedCuttingFinishIso,
-        isCuttingWithin10Days,
-        daysToEnd,
-        daysToTrigger,
+        ...commonExtras,
         foRequired: true,
         actionRequired: true,
         actionMessage: 'ESCALATE DELAYED FABRIC ORDER',
@@ -747,16 +863,7 @@ export function evaluatePlanningRecords(
     if (daysToTrigger !== null && daysToTrigger <= 0) {
       return {
         ...record,
-        isCurrentStyle,
-        triggerDateIso,
-        lifecycleStage,
-        cuttingFinishedQty,
-        cuttingRemainingQty,
-        cuttingDaysRemaining,
-        estimatedCuttingFinishIso,
-        isCuttingWithin10Days,
-        daysToEnd,
-        daysToTrigger,
+        ...commonExtras,
         foRequired: true,
         actionRequired: true,
         actionMessage: 'URGENT - RAISE FO IMMEDIATELY',
@@ -768,16 +875,7 @@ export function evaluatePlanningRecords(
     if (daysToTrigger !== null && daysToTrigger <= 14) {
       return {
         ...record,
-        isCurrentStyle,
-        triggerDateIso,
-        lifecycleStage,
-        cuttingFinishedQty,
-        cuttingRemainingQty,
-        cuttingDaysRemaining,
-        estimatedCuttingFinishIso,
-        isCuttingWithin10Days,
-        daysToEnd,
-        daysToTrigger,
+        ...commonExtras,
         foRequired: true,
         actionRequired: true,
         actionMessage: 'RAISE FABRIC ORDER BEFORE TRIGGER',
@@ -788,16 +886,7 @@ export function evaluatePlanningRecords(
 
     return {
       ...record,
-      isCurrentStyle,
-      triggerDateIso,
-      lifecycleStage,
-      cuttingFinishedQty,
-      cuttingRemainingQty,
-      cuttingDaysRemaining,
-      estimatedCuttingFinishIso,
-      isCuttingWithin10Days,
-      daysToEnd,
-      daysToTrigger,
+      ...commonExtras,
       foRequired: true,
       actionRequired: false,
       actionMessage: 'SCHEDULE FABRIC ORDER PER TRIGGER',
@@ -813,7 +902,7 @@ export function buildLineShortcutSummaries(
   options: PlanningRuleOptions = {}
 ): LineShortcutSummary[] {
   const inputOffset = Math.max(1, options.inputStartOffsetDays ?? 10);
-  const foOffset = Math.max(1, options.upcomingFoOffsetDays ?? 20);
+  const foOffset = Math.max(1, options.upcomingFoOffsetDays ?? 15);
   const lineOrder: string[] = [];
   const lineGroups = new Map<string, EvaluatedPlanningRecord[]>();
 
@@ -835,40 +924,71 @@ export function buildLineShortcutSummaries(
       sorted.find((r) => r.lifecycleStage === 'Running') ?? null;
     const upcomingRecord =
       sorted.find((r) => r.lifecycleStage === 'Upcoming (Next)') ?? null;
+    const hasManualRunning = runningRecord !== null;
+
+    // Rule: New style output starts 1 day after Running Style End Date (e.g., ends 25 Nov -> 26 Nov)
+    const newStyleOutputStartIso = runningRecord?.endDateIso
+      ? addDaysIso(runningRecord.endDateIso, 1)
+      : null;
+    const daysToNewStyleOutputStart = diffDaysIso(newStyleOutputStartIso, referenceDateIso);
 
     // Rule: New style input starts N days before Running Style End Date (default 10D)
     const newStyleInputStartIso = runningRecord?.endDateIso
       ? addDaysIso(runningRecord.endDateIso, -inputOffset)
       : null;
 
-    // Rule: Fabric Order required M days before New Style Input Start Date (default 20D)
+    // Rule: Fabric Order required M days before New Style Input Start Date (default 15D)
     const upcomingFoTriggerIso = newStyleInputStartIso
       ? addDaysIso(newStyleInputStartIso, -foOffset)
       : null;
 
+    const daysToNewStyleInputStart = diffDaysIso(newStyleInputStartIso, referenceDateIso);
     const daysToUpcomingFoTrigger = diffDaysIso(upcomingFoTriggerIso, referenceDateIso);
     const cuttingAlertActive = Boolean(runningRecord?.isCuttingWithin10Days);
 
     const upcomingNeedsFo =
       upcomingRecord !== null &&
+      !upcomingRecord.isFullQtyReleased &&
       upcomingRecord.foStatus !== 'In-House' &&
       upcomingRecord.foStatus !== 'FO Raised';
 
     const upcomingFoAlertActive =
+      hasManualRunning &&
       upcomingNeedsFo &&
       daysToUpcomingFoTrigger !== null &&
       daysToUpcomingFoTrigger <= 0;
 
+    const upcomingFoDueSoon =
+      hasManualRunning &&
+      upcomingNeedsFo &&
+      daysToUpcomingFoTrigger !== null &&
+      daysToUpcomingFoTrigger > 0 &&
+      daysToUpcomingFoTrigger <= 15;
+
+    const hasActionableUpcomingFo =
+      hasManualRunning &&
+      (upcomingFoAlertActive || upcomingFoDueSoon || cuttingAlertActive);
+
     let summaryStatus: LineShortcutSummary['summaryStatus'] = 'ON SCHEDULE';
     let summarySeverity: LineShortcutSummary['summarySeverity'] = 'normal';
-    let foNeedReason = 'Upcoming order outside 20-day FO window';
+    let foNeedReason = `Upcoming order outside ${foOffset}-day FO window`;
 
-    if (!upcomingRecord) {
+    if (!hasManualRunning) {
+      summaryStatus = 'SET RUNNING STYLE';
+      summarySeverity = 'normal';
+      foNeedReason = 'Select active Running Style manually to track next FO date';
+    } else if (!upcomingRecord) {
       summaryStatus = cuttingAlertActive ? 'CUTTING <= 10D · FO NEEDED' : 'NO UPCOMING PLAN';
       summarySeverity = cuttingAlertActive ? 'critical' : 'normal';
       foNeedReason = cuttingAlertActive
         ? `Running cutting ends in ${runningRecord?.cuttingDaysRemaining ?? 0}D — confirm next style & FO`
         : 'No queued style after running order';
+    } else if (upcomingRecord.isFullQtyReleased) {
+      summaryStatus = 'ON SCHEDULE';
+      summarySeverity = 'normal';
+      foNeedReason = upcomingRecord.sheetRemark
+        ? `FULL QTY RELEASED (${upcomingRecord.sheetRemark})`
+        : 'FULL QTY RELEASED';
     } else if (cuttingAlertActive && upcomingFoAlertActive) {
       summaryStatus = 'FO REQUIRED NOW';
       summarySeverity = 'critical';
@@ -880,12 +1000,8 @@ export function buildLineShortcutSummaries(
     } else if (upcomingFoAlertActive) {
       summaryStatus = 'FO REQUIRED NOW';
       summarySeverity = 'critical';
-      foNeedReason = `20D before input start (${formatDisplayDate(newStyleInputStartIso)}) reached on ${formatDisplayDate(upcomingFoTriggerIso)}`;
-    } else if (
-      upcomingNeedsFo &&
-      daysToUpcomingFoTrigger !== null &&
-      daysToUpcomingFoTrigger <= 15
-    ) {
+      foNeedReason = `${foOffset}D before input start (${formatDisplayDate(newStyleInputStartIso)}) reached on ${formatDisplayDate(upcomingFoTriggerIso)}`;
+    } else if (upcomingFoDueSoon) {
       summaryStatus = 'FO DUE SOON';
       summarySeverity = 'warning';
       foNeedReason = `FO trigger in ${daysToUpcomingFoTrigger}D (${formatDisplayDate(upcomingFoTriggerIso)})`;
@@ -907,14 +1023,402 @@ export function buildLineShortcutSummaries(
       productCategory: sample.productCategory,
       runningRecord,
       upcomingRecord,
+      newStyleOutputStartIso,
+      daysToNewStyleOutputStart,
       newStyleInputStartIso,
+      daysToNewStyleInputStart,
       upcomingFoTriggerIso,
       daysToUpcomingFoTrigger,
       cuttingAlertActive,
       upcomingFoAlertActive,
+      hasManualRunning,
+      hasActionableUpcomingFo,
       foNeedReason,
       summaryStatus,
       summarySeverity,
     };
   });
+}
+
+export function buildPgFoChecklistItems(
+  evaluatedRecords: EvaluatedPlanningRecord[],
+  shortcutSummaries: LineShortcutSummary[],
+  referenceDateIso: string,
+  options: PlanningRuleOptions = {}
+): PgFoChecklistItem[] {
+  const inputOffset = Math.max(1, options.inputStartOffsetDays ?? 10);
+  const foOffset = Math.max(1, options.upcomingFoOffsetDays ?? 15);
+
+  const shortcutByLineKey = new Map<string, LineShortcutSummary>();
+  for (const s of shortcutSummaries) {
+    shortcutByLineKey.set(`${s.factory}::${s.line}`, s);
+  }
+
+  interface Bucket {
+    factory: FactoryName;
+    pgIdentity: string;
+    pgNumber: string;
+    stageTag: 'RUNNING ORDER' | 'UPCOMING ORDER';
+    records: EvaluatedPlanningRecord[];
+  }
+
+  const buckets = new Map<string, Bucket>();
+
+  for (const rec of evaluatedRecords) {
+    if (rec.orderStatus === 'Order Closed' || rec.isFinished) continue;
+    if (rec.styleClassification === 'Open Capacity') continue;
+
+    // Strictly step-by-step: only currently Running and immediate Upcoming (Next) after Running.
+    // Queued slots (Slot 3, 4, 5...) step in automatically one by one when the Running order finishes.
+    const isRunning = rec.lifecycleStage === 'Running';
+    const isUpcomingNext = rec.lifecycleStage === 'Upcoming (Next)';
+    if (!isRunning && !isUpcomingNext) {
+      continue;
+    }
+
+    const stageTag: 'RUNNING ORDER' | 'UPCOMING ORDER' = isRunning
+      ? 'RUNNING ORDER'
+      : 'UPCOMING ORDER';
+    const pgNorm =
+      rec.pgNumber && rec.pgNumber !== '—' ? rec.pgNumber.trim().toUpperCase() : rec.id;
+    const key = `${rec.factory}::${pgNorm}::${stageTag}`;
+
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        factory: rec.factory,
+        pgIdentity: pgNorm,
+        pgNumber: rec.pgNumber || '—',
+        stageTag,
+        records: [],
+      };
+      buckets.set(key, bucket);
+    }
+    bucket.records.push(rec);
+  }
+
+  const items: PgFoChecklistItem[] = [];
+
+  for (const [key, bucket] of buckets.entries()) {
+    const recs = [...bucket.records].sort((a, b) => a.line.localeCompare(b.line));
+    const primaryRecord = recs[0];
+
+    const lineCapMap = new Map<string, number>();
+    for (const r of recs) {
+      if (!lineCapMap.has(r.line)) {
+        lineCapMap.set(r.line, r.capacityMc || 0);
+      }
+    }
+    const lines = Array.from(lineCapMap.keys());
+    const totalCapacityMc = Array.from(lineCapMap.values()).reduce((sum, c) => sum + c, 0);
+
+    const plannedValues = recs
+      .map((r) => r.plannedQty)
+      .filter((v): v is number => v !== null && v !== undefined && !Number.isNaN(v));
+    const orderQty = plannedValues.length > 0 ? Math.max(...plannedValues) : null;
+
+    const issueValues = recs
+      .map((r) => r.effectiveIssueQty)
+      .filter((v): v is number => v !== null && v !== undefined && !Number.isNaN(v));
+    const issueQty = issueValues.length > 0 ? Math.max(...issueValues) : orderQty;
+
+    const isFullQtyReleased = recs.some((r) => r.isFullQtyReleased);
+    const remarksSet = new Set<string>();
+    for (const r of recs) {
+      const sr = (r.sheetRemark || '').trim();
+      const fn = (r.fabricNote || '').trim();
+      if (sr) remarksSet.add(sr);
+      else if (fn && detectFullQtyReleasedFromText(fn)) remarksSet.add(fn);
+    }
+    const sheetRemark = Array.from(remarksSet).join(' · ');
+
+    const cuttingFinishedQty = recs.reduce(
+      (maxCut, r) => Math.max(maxCut, r.cuttingFinishedQty || 0),
+      0
+    );
+    const cuttingDaysVals = recs
+      .map((r) => r.cuttingDaysRemaining)
+      .filter((d): d is number => d !== null && d !== undefined);
+    const cuttingDaysRemaining =
+      cuttingDaysVals.length > 0 ? Math.min(...cuttingDaysVals) : null;
+
+    let runningEndIso: string | null = null;
+    let newStyleOutputStartIso: string | null = null;
+    let inputStartIso: string | null = null;
+    let foTriggerIso: string | null = null;
+    let lineCuttingAlert = recs.some((r) => r.isCuttingWithin10Days);
+
+    if (bucket.stageTag === 'RUNNING ORDER') {
+      const endDates = recs
+        .map((r) => r.endDateIso)
+        .filter((d): d is string => Boolean(d))
+        .sort();
+      runningEndIso = endDates[0] ?? null;
+      newStyleOutputStartIso = addDaysIso(runningEndIso, 1);
+      inputStartIso = addDaysIso(runningEndIso, -inputOffset);
+      foTriggerIso = addDaysIso(inputStartIso, -foOffset);
+    } else {
+      const associatedShortcuts = recs
+        .map((r) => shortcutByLineKey.get(`${r.factory}::${r.line}`) ?? null)
+        .filter((sc): sc is LineShortcutSummary => sc !== null);
+      const runningEnds = associatedShortcuts
+        .map((sc) => sc.runningRecord?.endDateIso ?? null)
+        .filter((d): d is string => Boolean(d))
+        .sort();
+      if (associatedShortcuts.some((sc) => sc.cuttingAlertActive)) {
+        lineCuttingAlert = true;
+      }
+
+      if (runningEnds.length > 0) {
+        runningEndIso = runningEnds[0];
+        newStyleOutputStartIso = addDaysIso(runningEndIso, 1);
+        inputStartIso = addDaysIso(runningEndIso, -inputOffset);
+        foTriggerIso = addDaysIso(inputStartIso, -foOffset);
+      } else {
+        const ownEnds = recs
+          .map((r) => r.endDateIso)
+          .filter((d): d is string => Boolean(d))
+          .sort();
+        const ownEnd = ownEnds[0] ?? null;
+        newStyleOutputStartIso = ownEnd ? addDaysIso(ownEnd, 1) : null;
+        inputStartIso = ownEnd ? addDaysIso(ownEnd, -inputOffset) : null;
+        foTriggerIso = inputStartIso ? addDaysIso(inputStartIso, -foOffset) : null;
+      }
+    }
+
+    const daysToNewStyleOutputStart = diffDaysIso(newStyleOutputStartIso, referenceDateIso);
+    const daysToInputStart = diffDaysIso(inputStartIso, referenceDateIso);
+    const daysToFoTrigger = diffDaysIso(foTriggerIso, referenceDateIso);
+
+    const anyFoRaised = recs.some((r) => r.foStatus === 'FO Raised');
+    const anyDelayed = recs.some((r) => r.foStatus === 'Delayed');
+    const foStatus = isFullQtyReleased
+      ? 'In-House'
+      : anyDelayed
+        ? 'Delayed'
+        : anyFoRaised
+          ? 'FO Raised'
+          : primaryRecord.foStatus;
+    const foNumber =
+      recs.map((r) => (r.foNumber || '').trim()).find(Boolean) || '';
+
+    const needsFo =
+      !isFullQtyReleased &&
+      foStatus !== 'In-House' &&
+      (foStatus !== 'FO Raised' || (daysToFoTrigger !== null && daysToFoTrigger <= 0));
+
+    const foOverdue = needsFo && daysToFoTrigger !== null && daysToFoTrigger <= 0;
+    const foDueSoon =
+      needsFo && daysToFoTrigger !== null && daysToFoTrigger > 0 && daysToFoTrigger <= 15;
+
+    // Recent actionable window: due now/overdue, due within 15D, cutting <= 10D, delayed, or missing trigger date.
+    // Distant styles (> 15D away) wait until their turn enters the recent window step by step.
+    const isActionableWindow =
+      isFullQtyReleased ||
+      (needsFo &&
+        (lineCuttingAlert ||
+          foOverdue ||
+          foDueSoon ||
+          anyDelayed ||
+          daysToFoTrigger === null));
+
+    let statusLabel = 'ON SCHEDULE';
+    let severity: PgFoChecklistItem['severity'] = 'upcoming';
+    let reasonLabel = '';
+
+    if (isFullQtyReleased) {
+      statusLabel = 'FULL QTY RELEASED';
+      severity = 'released';
+      reasonLabel = sheetRemark
+        ? `Sheet Summary: ${sheetRemark}`
+        : 'Full fabric quantity released & complete';
+    } else if (lineCuttingAlert && foOverdue) {
+      statusLabel = 'FO REQUIRED NOW';
+      severity = 'critical';
+      reasonLabel = `Cutting alert + FO trigger passed (${formatDisplayDate(foTriggerIso)})`;
+    } else if (lineCuttingAlert) {
+      statusLabel = 'CUTTING <= 10D · FO NEEDED';
+      severity = 'critical';
+      reasonLabel = `Cutting finishes in ${cuttingDaysRemaining ?? 0}D — confirm FO`;
+    } else if (foOverdue) {
+      statusLabel = 'FO REQUIRED NOW';
+      severity = 'critical';
+      reasonLabel = `${foOffset}D before input start (${formatDisplayDate(inputStartIso)}) passed`;
+    } else if (anyDelayed) {
+      statusLabel = 'CRITICAL - FO DELAYED';
+      severity = 'critical';
+      reasonLabel = 'Escalate delayed fabric order';
+    } else if (foDueSoon) {
+      statusLabel = 'FO DUE SOON';
+      severity = 'warning';
+      reasonLabel = `FO needed in ${daysToFoTrigger}D (${formatDisplayDate(foTriggerIso)})`;
+    } else if (daysToFoTrigger !== null && daysToFoTrigger > 15) {
+      statusLabel = 'LATER · STEP BY STEP';
+      severity = 'normal';
+      reasonLabel =
+        sheetRemark ||
+        `FO needed in ${daysToFoTrigger}D (${formatDisplayDate(foTriggerIso)})`;
+    } else if (orderQty === null) {
+      statusLabel = 'PLAN QTY PENDING · FO NEED';
+      severity = 'warning';
+      reasonLabel = 'Order/Issue qty pending — check FO status';
+    } else if (foStatus === 'FO Raised') {
+      statusLabel = 'FO IN PROGRESS';
+      severity = 'upcoming';
+      reasonLabel = sheetRemark || 'FO raised — awaiting full qty release';
+    } else {
+      statusLabel =
+        bucket.stageTag === 'RUNNING ORDER' ? 'RUNNING · FO PENDING' : 'UPCOMING · SCHEDULED';
+      severity = bucket.stageTag === 'RUNNING ORDER' ? 'warning' : 'upcoming';
+      reasonLabel =
+        sheetRemark ||
+        (foTriggerIso
+          ? `FO trigger on ${formatDisplayDate(foTriggerIso)}`
+          : 'Monitor FO release');
+    }
+
+    const recordIds = recs.map((r) => r.id);
+    const allSelected =
+      recordIds.length > 0 && recs.every((r) => Boolean(r.upcomingFoSelected));
+
+    items.push({
+      key,
+      factory: bucket.factory,
+      pgNumber: bucket.pgNumber,
+      style: primaryRecord.style,
+      stageTag: bucket.stageTag,
+      lines,
+      totalCapacityMc,
+      orderQty,
+      issueQty,
+      runningEndIso,
+      newStyleOutputStartIso,
+      daysToNewStyleOutputStart,
+      inputStartIso,
+      daysToInputStart,
+      foTriggerIso,
+      daysToFoTrigger,
+      foStatus,
+      foNumber,
+      isFullQtyReleased,
+      sheetRemark,
+      cuttingFinishedQty,
+      cuttingDaysRemaining,
+      cuttingAlertActive: lineCuttingAlert,
+      needsFo,
+      isActionableWindow,
+      statusLabel,
+      reasonLabel,
+      severity,
+      primaryRecord,
+      recordIds,
+      allSelected,
+    });
+  }
+
+  const sevRank: Record<PgFoChecklistItem['severity'], number> = {
+    critical: 0,
+    warning: 1,
+    upcoming: 2,
+    normal: 3,
+    released: 4,
+  };
+
+  return items.sort((a, b) => {
+    if (sevRank[a.severity] !== sevRank[b.severity]) {
+      return sevRank[a.severity] - sevRank[b.severity];
+    }
+    return (a.foTriggerIso || '9999-12-31').localeCompare(b.foTriggerIso || '9999-12-31');
+  });
+}
+
+export interface PgWiseQtySummary {
+  uniquePgCount: number;
+  releasedPgCount: number;
+  foNeededPgCount: number;
+  totalPgOrderQty: number;
+  totalPgIssueQty: number;
+  byFactory: Record<
+    FactoryName,
+    {
+      uniquePgCount: number;
+      releasedPgCount: number;
+      foNeededPgCount: number;
+      orderQty: number;
+      issueQty: number;
+    }
+  >;
+}
+
+export function computePgWiseQtySummary(pgItems: PgFoChecklistItem[]): PgWiseQtySummary {
+  const seenPg = new Map<
+    string,
+    {
+      factory: FactoryName;
+      orderQty: number;
+      issueQty: number;
+      released: boolean;
+      needsFo: boolean;
+    }
+  >();
+
+  for (const item of pgItems) {
+    const pgKey = `${item.factory}::${
+      item.pgNumber && item.pgNumber !== '—' ? item.pgNumber.toUpperCase() : item.key
+    }`;
+    const existing = seenPg.get(pgKey);
+    const ord = item.orderQty ?? 0;
+    const iss = item.issueQty ?? ord;
+    if (!existing) {
+      seenPg.set(pgKey, {
+        factory: item.factory,
+        orderQty: ord,
+        issueQty: iss,
+        released: item.isFullQtyReleased,
+        needsFo: item.needsFo,
+      });
+    } else {
+      existing.orderQty = Math.max(existing.orderQty, ord);
+      existing.issueQty = Math.max(existing.issueQty, iss);
+      existing.released = existing.released || item.isFullQtyReleased;
+      existing.needsFo = existing.needsFo && !existing.released ? true : item.needsFo;
+    }
+  }
+
+  const byFactory: PgWiseQtySummary['byFactory'] = {
+    'ALEX 1': { uniquePgCount: 0, releasedPgCount: 0, foNeededPgCount: 0, orderQty: 0, issueQty: 0 },
+    'ALEX 3': { uniquePgCount: 0, releasedPgCount: 0, foNeededPgCount: 0, orderQty: 0, issueQty: 0 },
+    'ALEX 5': { uniquePgCount: 0, releasedPgCount: 0, foNeededPgCount: 0, orderQty: 0, issueQty: 0 },
+    'ALEX 12': { uniquePgCount: 0, releasedPgCount: 0, foNeededPgCount: 0, orderQty: 0, issueQty: 0 },
+  };
+
+  let uniquePgCount = 0;
+  let releasedPgCount = 0;
+  let foNeededPgCount = 0;
+  let totalPgOrderQty = 0;
+  let totalPgIssueQty = 0;
+
+  for (const entry of seenPg.values()) {
+    uniquePgCount += 1;
+    if (entry.released) releasedPgCount += 1;
+    if (entry.needsFo && !entry.released) foNeededPgCount += 1;
+    totalPgOrderQty += entry.orderQty;
+    totalPgIssueQty += entry.issueQty;
+
+    const facBucket = byFactory[entry.factory];
+    facBucket.uniquePgCount += 1;
+    if (entry.released) facBucket.releasedPgCount += 1;
+    if (entry.needsFo && !entry.released) facBucket.foNeededPgCount += 1;
+    facBucket.orderQty += entry.orderQty;
+    facBucket.issueQty += entry.issueQty;
+  }
+
+  return {
+    uniquePgCount,
+    releasedPgCount,
+    foNeededPgCount,
+    totalPgOrderQty,
+    totalPgIssueQty,
+    byFactory,
+  };
 }

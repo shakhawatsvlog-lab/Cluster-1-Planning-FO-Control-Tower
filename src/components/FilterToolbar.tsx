@@ -17,7 +17,7 @@ interface FilterToolbarProps {
   onSearchChange: (q: string) => void;
   referenceDateIso: string;
   onReferenceDateChange: (iso: string) => void;
-  onUploadCsv: (csvText: string, fileName: string) => void;
+  onUploadPlanFile: (file: File) => void;
   hasCustomEdits: boolean;
   onResetEdits: () => void;
 }
@@ -34,7 +34,7 @@ export function FilterToolbar({
   onSearchChange,
   referenceDateIso,
   onReferenceDateChange,
-  onUploadCsv,
+  onUploadPlanFile,
   hasCustomEdits,
   onResetEdits,
 }: FilterToolbarProps) {
@@ -43,26 +43,20 @@ export function FilterToolbar({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        onUploadCsv(reader.result, file.name);
-      }
-    };
-    reader.readAsText(file);
+    onUploadPlanFile(file);
     e.target.value = '';
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end gap-3">
         {/* Factory Dropdown */}
-        <div className="flex flex-col gap-1 min-w-[150px]">
+        <div className="flex flex-col gap-1 lg:min-w-[150px]">
           <label
             htmlFor="factory-filter"
-            className="text-xs font-medium text-slate-500"
+            className="text-xs font-medium text-slate-600"
           >
-            Factory Dropdown
+            Factory
           </label>
           <select
             id="factory-filter"
@@ -80,9 +74,9 @@ export function FilterToolbar({
         </div>
 
         {/* Cascaded Line Dropdown */}
-        <div className="flex flex-col gap-1 min-w-[165px]">
-          <label htmlFor="line-filter" className="text-xs font-medium text-slate-500">
-            Line Dropdown
+        <div className="flex flex-col gap-1 lg:min-w-[160px]">
+          <label htmlFor="line-filter" className="text-xs font-medium text-slate-600">
+            Production Line
           </label>
           <select
             id="line-filter"
@@ -101,12 +95,12 @@ export function FilterToolbar({
 
         {/* Plan Stage Segmented Filter */}
         <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-slate-500">Plan Scope</span>
-          <div className="flex items-center p-1 bg-slate-100 rounded-lg h-10">
+          <span className="text-xs font-medium text-slate-600">Plan Scope</span>
+          <div className="flex items-center p-1 bg-slate-100 rounded-lg h-10 w-full sm:w-auto">
             <button
               type="button"
               onClick={() => onStageFilterChange('ALL')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+              className={`flex-1 sm:flex-initial px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 stageFilter === 'ALL'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -117,7 +111,7 @@ export function FilterToolbar({
             <button
               type="button"
               onClick={() => onStageFilterChange('CURRENT_ONLY')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+              className={`flex-1 sm:flex-initial px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 stageFilter === 'CURRENT_ONLY'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -130,7 +124,7 @@ export function FilterToolbar({
 
         {/* Reference Date */}
         <div className="flex flex-col gap-1">
-          <label htmlFor="ref-date" className="text-xs font-medium text-slate-500">
+          <label htmlFor="ref-date" className="text-xs font-medium text-slate-600">
             Trigger Ref Date
           </label>
           <input
@@ -145,9 +139,9 @@ export function FilterToolbar({
         </div>
 
         {/* Search Input */}
-        <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
-          <label htmlFor="plan-search" className="text-xs font-medium text-slate-500">
-            Search Style / Buyer / FO
+        <div className="flex flex-col gap-1 sm:col-span-2 lg:flex-1 lg:min-w-[200px]">
+          <label htmlFor="plan-search" className="text-xs font-medium text-slate-600">
+            Search Style / PG# / FO
           </label>
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -156,34 +150,34 @@ export function FilterToolbar({
               type="text"
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Filter style, buyer, line, or FO#..."
+              placeholder="Filter PG#, style, line, or FO#..."
               className="w-full h-10 pl-9 pr-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
         </div>
 
-        {/* Upload CSV & Reset */}
-        <div className="flex items-end gap-2 self-end">
+        {/* Upload CSV / XLSX & Reset */}
+        <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-1">
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={handleFileChange}
             className="hidden"
           />
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+            className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Upload className="w-3.5 h-3.5" />
-            <span>Upload CSV</span>
+            <span>Upload Plan (.csv/.xlsx)</span>
           </button>
           {hasCustomEdits && (
             <button
               type="button"
               onClick={onResetEdits}
-              className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+              className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Reset Plan</span>

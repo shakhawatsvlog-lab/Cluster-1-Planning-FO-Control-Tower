@@ -13,7 +13,7 @@ export const DEFAULT_WEBSITE_CONTROL_CONFIG: WebsiteControlConfig = {
   portalTitle: 'Cluster 1 Planning & FO Control Tower',
   readOnlyPublicMode: false,
   inputStartOffsetDays: 10,
-  upcomingFoOffsetDays: 20,
+  upcomingFoOffsetDays: 15,
   cuttingAlertDays: 10,
-  recoveryEmail: 'shakhawat.global@gmail.com',
+  recoveryEmail: '',
 };

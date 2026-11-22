@@ -1,17 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
+import type { User } from 'firebase/auth';
 import {
+  AlertTriangle,
   Check,
+  Cloud,
   Database,
   Download,
+  ExternalLink,
   Eye,
   EyeOff,
+  HardDrive,
   KeyRound,
   Lock,
+  LogOut,
   Mail,
+  RefreshCw,
   RotateCcw,
   Save,
   Send,
   ShieldCheck,
+  Trash2,
   Unlock,
   Upload,
 } from 'lucide-react';
@@ -27,10 +35,23 @@ import type {
   SmtpSettingsPublic,
 } from '../shared/reminderTypes.ts';
 import type { WebsiteControlConfig } from '../shared/controlPanelTypes.ts';
+import {
+  deleteDriveFile,
+  downloadDriveJsonFile,
+  hasInMemoryDriveToken,
+  listDriveBackups,
+  saveBackupBundleToDrive,
+  signInWithGoogleDrive,
+  signOutGoogleDrive,
+  subscribeGoogleAuth,
+} from '../lib/googleDrive.ts';
+import type { DriveFileItem } from '../lib/googleDrive.ts';
+import { GoogleSignInButton } from './GoogleSignInButton.tsx';
 import type { NavTab } from './Sidebar.tsx';
 
 interface ControlPanelViewProps {
   adminUnlocked: boolean;
+  needsInitialSetup?: boolean;
   siteConfig: WebsiteControlConfig;
   meta: MasterPlanMeta;
   records: PlanningRecord[];
@@ -38,6 +59,10 @@ interface ControlPanelViewProps {
   reminders: ReminderWorkspaceState;
   smtpStatus: SmtpSettingsPublic;
   onUnlock: (password: string) => Promise<{ ok: boolean; error?: string }>;
+  onBootstrapAdmin?: (payload: {
+    password: string;
+    recoveryEmail?: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
   onLock: () => Promise<void>;
   onUpdateSiteConfig: (
     patch: Partial<WebsiteControlConfig>
@@ -51,10 +76,13 @@ interface ControlPanelViewProps {
     code: string;
     newPassword: string;
   }) => Promise<{ ok: boolean; message: string }>;
-  onUploadCsv: (csvText: string, fileName: string) => void;
+  onUploadPlanFile: (file: File) => void;
   onResetPlan: () => Promise<void>;
   onDownloadXlsx: () => Promise<void>;
   onDownloadBackup: () => Promise<void>;
+  onGetBackupJson: () => Promise<string | null>;
+  onGetXlsxBlob: () => Promise<Blob | null>;
+  onRestoreSnapshot: (snapshot: unknown) => Promise<{ ok: boolean; error?: string }>;
   onReopenOrder: (id: string, status: OrderStatus) => void;
   onUpdateSchedule: (patch: Partial<ReminderScheduleConfig>) => Promise<void>;
   onSendReminderNow: () => Promise<{ ok: boolean; message: string }>;
@@ -63,6 +91,7 @@ interface ControlPanelViewProps {
 
 export function ControlPanelView({
   adminUnlocked,
+  needsInitialSetup = false,
   siteConfig,
   meta,
   records,
@@ -70,21 +99,26 @@ export function ControlPanelView({
   reminders,
   smtpStatus,
   onUnlock,
+  onBootstrapAdmin,
   onLock,
   onUpdateSiteConfig,
   onRequestPasswordCode,
   onChangePassword,
-  onUploadCsv,
+  onUploadPlanFile,
   onResetPlan,
   onDownloadXlsx,
   onDownloadBackup,
+  onGetBackupJson,
+  onGetXlsxBlob,
+  onRestoreSnapshot,
   onReopenOrder,
   onUpdateSchedule,
   onSendReminderNow,
   onNavigateTab,
 }: ControlPanelViewProps) {
-  // Unlock Gate State
+  // Unlock / Initial Bootstrap Gate State
   const [passwordInput, setPasswordInput] = useState('');
+  const [bootstrapRecoveryEmail, setBootstrapRecoveryEmail] = useState('');
   const [showUnlockPass, setShowUnlockPass] = useState(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
@@ -123,12 +157,40 @@ export function ControlPanelView({
 
   // Data Controls State
   const csvInputRef = useRef<HTMLInputElement | null>(null);
+  const localJsonInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [sendingReminder, setSendingReminder] = useState(false);
   const [reminderFeedback, setReminderFeedback] = useState<{
     ok: boolean;
     text: string;
   } | null>(null);
+
+  // Google Drive Cloud Backup & Restore State
+  const [googleUser, setGoogleUser] = useState<User | null>(null);
+  const [hasDriveToken, setHasDriveToken] = useState(false);
+  const [driveFiles, setDriveFiles] = useState<DriveFileItem[]>([]);
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [driveFeedback, setDriveFeedback] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+  const [pendingDriveAction, setPendingDriveAction] = useState<
+    | { type: 'restore'; file: DriveFileItem }
+    | { type: 'delete'; file: DriveFileItem }
+    | { type: 'restore_local'; fileName: string; parsedJson: unknown }
+    | null
+  >(null);
+
+  useEffect(() => {
+    const unsub = subscribeGoogleAuth((user) => {
+      setGoogleUser(user);
+      setHasDriveToken(Boolean(user && hasInMemoryDriveToken()));
+      if (!user) {
+        setDriveFiles([]);
+      }
+    });
+    return unsub;
+  }, []);
 
   useEffect(() => {
     setCompanyName(siteConfig.companyName);
@@ -143,14 +205,25 @@ export function ControlPanelView({
   const handleUnlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setUnlockError(null);
+    if (needsInitialSetup && passwordInput.length < 8) {
+      setUnlockError('Initial admin password must be at least 8 characters long.');
+      return;
+    }
     setUnlocking(true);
     try {
-      const res = await onUnlock(passwordInput);
+      const res =
+        needsInitialSetup && onBootstrapAdmin
+          ? await onBootstrapAdmin({
+              password: passwordInput,
+              recoveryEmail: bootstrapRecoveryEmail.trim() || undefined,
+            })
+          : await onUnlock(passwordInput);
       if (!res.ok) {
-        setUnlockError(res.error || 'Incorrect password.');
+        setUnlockError(res.error || 'Authentication failed.');
         return;
       }
       setPasswordInput('');
+      setBootstrapRecoveryEmail('');
     } finally {
       setUnlocking(false);
     }
@@ -158,36 +231,41 @@ export function ControlPanelView({
 
   if (!adminUnlocked) {
     return (
-      <div className="min-h-[65vh] flex items-center justify-center px-4">
-        <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 space-y-5 shadow-xs">
+      <div className="min-h-[65vh] flex items-center justify-center px-3 sm:px-4">
+        <div className="w-full max-w-md bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-5 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0">
               <Lock className="w-5 h-5" />
             </div>
             <div>
               <h2 className="font-display text-lg font-bold text-slate-900">
-                Website Control Panel
+                {needsInitialSetup ? 'Set Initial Admin Password' : 'Website Control Panel'}
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Admin password required to access full website controls.
+                {needsInitialSetup
+                  ? 'Create the first administrator password to secure editing, imports, and backups.'
+                  : 'Admin authentication required to manage website settings, data writes, and security.'}
               </p>
             </div>
           </div>
 
           <form onSubmit={handleUnlockSubmit} className="space-y-4">
             <div className="flex flex-col gap-1.5">
-              <label htmlFor="cp-password" className="text-xs font-medium text-slate-600">
-                Control Panel Password
+              <label htmlFor="cp-password" className="text-xs font-semibold text-slate-700">
+                {needsInitialSetup ? 'New Admin Password (min 8 characters)' : 'Admin Password'}
               </label>
               <div className="relative">
                 <input
                   id="cp-password"
                   type={showUnlockPass ? 'text' : 'password'}
                   required
+                  minLength={needsInitialSetup ? 8 : undefined}
                   autoFocus
                   value={passwordInput}
                   onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="Enter admin password"
+                  placeholder={
+                    needsInitialSetup ? 'Create a strong password (min 8 chars)' : 'Enter admin password'
+                  }
                   className="w-full h-11 pl-3.5 pr-10 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
                 <button
@@ -201,6 +279,22 @@ export function ControlPanelView({
               </div>
             </div>
 
+            {needsInitialSetup && (
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="cp-bootstrap-email" className="text-xs font-semibold text-slate-700">
+                  Admin Recovery Email (Optional)
+                </label>
+                <input
+                  id="cp-bootstrap-email"
+                  type="email"
+                  value={bootstrapRecoveryEmail}
+                  onChange={(e) => setBootstrapRecoveryEmail(e.target.value)}
+                  placeholder="admin@company.com"
+                  className="w-full h-11 px-3.5 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
+            )}
+
             {unlockError && (
               <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                 {unlockError}
@@ -210,16 +304,21 @@ export function ControlPanelView({
             <button
               type="submit"
               disabled={unlocking || !passwordInput}
-              className="w-full h-11 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full h-11 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <Unlock className="w-4 h-4" />
-              <span>{unlocking ? 'Verifying...' : 'Unlock Control Panel'}</span>
+              <span>
+                {unlocking
+                  ? 'Verifying...'
+                  : needsInitialSetup
+                    ? 'Save Password & Unlock'
+                    : 'Sign In to Control Panel'}
+              </span>
             </button>
           </form>
 
           <div className="pt-3 border-t border-slate-100 text-[11px] text-slate-500">
-            Protected administration for {siteConfig.companyName} · Password changes require email code verification sent to{' '}
-            <span className="font-mono text-slate-700">{siteConfig.recoveryEmail}</span>.
+            Protected administration for {siteConfig.companyName} · Signed HttpOnly session with brute-force lockout protection.
           </div>
         </div>
       </div>
@@ -241,7 +340,7 @@ export function ControlPanelView({
         portalTitle: portalTitle.trim(),
         readOnlyPublicMode,
         inputStartOffsetDays: Number(inputStartOffset) || 10,
-        upcomingFoOffsetDays: Number(upcomingFoOffset) || 20,
+        upcomingFoOffsetDays: Number(upcomingFoOffset) || 15,
         cuttingAlertDays: Number(cuttingAlertDays) || 10,
         recoveryEmail: recoveryEmail.trim(),
       });
@@ -278,10 +377,10 @@ export function ControlPanelView({
   const handleChangePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPassChangeFeedback(null);
-    if (newPassword.length < 6) {
+    if (newPassword.length < 8) {
       setPassChangeFeedback({
         ok: false,
-        text: 'New password must be at least 6 characters long.',
+        text: 'New password must be at least 8 characters long.',
       });
       return;
     }
@@ -313,14 +412,157 @@ export function ControlPanelView({
   const handleCsvSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    onUploadPlanFile(file);
+    e.target.value = '';
+  };
+
+  const handleLocalJsonSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        onUploadCsv(reader.result, file.name);
+      if (typeof reader.result !== 'string') return;
+      try {
+        const parsed = JSON.parse(reader.result);
+        setPendingDriveAction({
+          type: 'restore_local',
+          fileName: file.name,
+          parsedJson: parsed,
+        });
+      } catch {
+        setDriveFeedback({
+          ok: false,
+          text: `Invalid JSON backup file "${file.name}".`,
+        });
       }
     };
     reader.readAsText(file);
     e.target.value = '';
+  };
+
+  const refreshDriveFiles = async () => {
+    setDriveBusy(true);
+    try {
+      const files = await listDriveBackups();
+      setDriveFiles(files);
+      setHasDriveToken(hasInMemoryDriveToken());
+    } catch (err) {
+      setHasDriveToken(hasInMemoryDriveToken());
+      setDriveFeedback({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Unable to list Google Drive backups.',
+      });
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleGoogleDriveSignIn = async () => {
+    setDriveFeedback(null);
+    setDriveBusy(true);
+    try {
+      const { user } = await signInWithGoogleDrive();
+      setGoogleUser(user);
+      setHasDriveToken(true);
+      const files = await listDriveBackups();
+      setDriveFiles(files);
+      setDriveFeedback({
+        ok: true,
+        text: `Connected Google Drive as ${user.email || user.displayName || 'Google User'}.`,
+      });
+    } catch (err) {
+      setDriveFeedback({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Google Sign-In failed.',
+      });
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleGoogleDriveSignOut = async () => {
+    setDriveFeedback(null);
+    await signOutGoogleDrive();
+    setGoogleUser(null);
+    setHasDriveToken(false);
+    setDriveFiles([]);
+  };
+
+  const handleSaveBundleToDrive = async () => {
+    setDriveFeedback(null);
+    setDriveBusy(true);
+    try {
+      const [snapshotJson, xlsxBlob] = await Promise.all([
+        onGetBackupJson(),
+        onGetXlsxBlob(),
+      ]);
+      if (!snapshotJson) {
+        throw new Error('Failed to generate current workspace JSON snapshot.');
+      }
+      const result = await saveBackupBundleToDrive({
+        snapshotJson,
+        xlsxBlob,
+      });
+      setHasDriveToken(true);
+      const files = await listDriveBackups();
+      setDriveFiles(files);
+      setDriveFeedback({
+        ok: true,
+        text: `Saved "${result.jsonFile.name}"${result.xlsxFile ? ` + "${result.xlsxFile.name}"` : ''} to Google Drive folder "Alex Apparels Planning Backups".`,
+      });
+    } catch (err) {
+      setHasDriveToken(hasInMemoryDriveToken());
+      setDriveFeedback({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Failed to save backup to Google Drive.',
+      });
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleConfirmPendingAction = async () => {
+    if (!pendingDriveAction) return;
+    const action = pendingDriveAction;
+    setPendingDriveAction(null);
+    setDriveBusy(true);
+    setDriveFeedback(null);
+    try {
+      if (action.type === 'restore') {
+        const snapshot = await downloadDriveJsonFile(action.file.id);
+        const res = await onRestoreSnapshot(snapshot);
+        setDriveFeedback({
+          ok: res.ok,
+          text: res.ok
+            ? `Restored workspace from Google Drive backup "${action.file.name}".`
+            : res.error || 'Failed to restore backup snapshot.',
+        });
+      } else if (action.type === 'delete') {
+        await deleteDriveFile(action.file.id);
+        const files = await listDriveBackups();
+        setDriveFiles(files);
+        setDriveFeedback({
+          ok: true,
+          text: `Deleted "${action.file.name}" from Google Drive.`,
+        });
+      } else if (action.type === 'restore_local') {
+        const res = await onRestoreSnapshot(action.parsedJson);
+        setDriveFeedback({
+          ok: res.ok,
+          text: res.ok
+            ? `Restored workspace from local JSON "${action.fileName}".`
+            : res.error || 'Failed to restore local backup snapshot.',
+        });
+      }
+    } catch (err) {
+      setHasDriveToken(hasInMemoryDriveToken());
+      setDriveFeedback({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Operation failed.',
+      });
+    } finally {
+      setDriveBusy(false);
+    }
   };
 
   return (
@@ -542,11 +784,17 @@ export function ControlPanelView({
                 Change Control Panel Password
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Requires a 6-digit verification code emailed to{' '}
-                <span className="font-mono font-semibold text-slate-700">
-                  {siteConfig.recoveryEmail}
-                </span>
-                .
+                {siteConfig.recoveryEmail ? (
+                  <>
+                    Requires a 6-digit verification code emailed to{' '}
+                    <span className="font-mono font-semibold text-slate-700">
+                      {siteConfig.recoveryEmail}
+                    </span>
+                    .
+                  </>
+                ) : (
+                  'Set an Admin Verification Email on the left before changing the admin password.'
+                )}
               </p>
             </div>
           </div>
@@ -557,17 +805,19 @@ export function ControlPanelView({
             </div>
             <button
               type="button"
-              disabled={otpSending}
+              disabled={otpSending || !siteConfig.recoveryEmail}
               onClick={handleRequestOtp}
-              className="w-full h-10 px-4 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs sm:text-sm font-medium inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <Mail className="w-4 h-4" />
               <span>
                 {otpSending
                   ? 'Sending Code...'
-                  : otpSent
-                    ? `Resend Code to ${siteConfig.recoveryEmail}`
-                    : `Send Verification Code to ${siteConfig.recoveryEmail}`}
+                  : !siteConfig.recoveryEmail
+                    ? 'Configure Verification Email First'
+                    : otpSent
+                      ? `Resend Code to ${siteConfig.recoveryEmail}`
+                      : `Send Verification Code to ${siteConfig.recoveryEmail}`}
               </span>
             </button>
 
@@ -624,9 +874,10 @@ export function ControlPanelView({
                   id="cp-new-pass"
                   type={showNewPass ? 'text' : 'password'}
                   required
+                  minLength={8}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Minimum 6 characters"
+                  placeholder="Minimum 8 characters"
                   className="w-full h-10 pl-3 pr-9 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
                 <button
@@ -698,7 +949,7 @@ export function ControlPanelView({
             <input
               ref={csvInputRef}
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={handleCsvSelect}
               className="hidden"
             />
@@ -708,7 +959,7 @@ export function ControlPanelView({
               className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-medium inline-flex items-center gap-2 cursor-pointer"
             >
               <Upload className="w-4 h-4 text-slate-500" />
-              <span>Upload Revised CSV Plan</span>
+              <span>Upload Revised Plan (.csv / .xlsx)</span>
             </button>
 
             <button
@@ -727,6 +978,22 @@ export function ControlPanelView({
             >
               <Download className="w-4 h-4 text-slate-500" />
               <span>Download JSON Backup</span>
+            </button>
+
+            <input
+              ref={localJsonInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={handleLocalJsonSelect}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => localJsonInputRef.current?.click()}
+              className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-medium inline-flex items-center gap-2 cursor-pointer"
+            >
+              <HardDrive className="w-4 h-4 text-slate-500" />
+              <span>Restore Local JSON</span>
             </button>
 
             {!confirmReset ? (
@@ -903,6 +1170,255 @@ export function ControlPanelView({
           </div>
         </section>
       </div>
+
+      {/* Row 3: Google Drive Cloud Backup & Restore */}
+      <section className="card-3d bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-2.5">
+            <Cloud className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
+            <div>
+              <h3 className="font-display text-sm font-bold text-slate-900">
+                Google Drive Cloud Backup &amp; Restore
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Save your full website state (.json) and formatted Excel (.xlsx) directly to your Google Drive folder{' '}
+                <span className="font-mono font-semibold text-slate-700">Alex Apparels Planning Backups</span> so you can restore anytime.
+              </p>
+            </div>
+          </div>
+
+          {!googleUser || !hasDriveToken ? (
+            <GoogleSignInButton
+              onClick={handleGoogleDriveSignIn}
+              disabled={driveBusy}
+              label={googleUser ? 'Reconnect Google Drive' : 'Sign in with Google'}
+            />
+          ) : (
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-900">
+                Connected:{' '}
+                <span className="font-mono font-semibold">
+                  {googleUser.email || googleUser.displayName}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={driveBusy}
+                onClick={handleSaveBundleToDrive}
+                className="h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer"
+              >
+                <Cloud className="w-4 h-4" />
+                <span>{driveBusy ? 'Saving to Drive...' : 'Save App & Excel to Google Drive'}</span>
+              </button>
+              <button
+                type="button"
+                disabled={driveBusy}
+                onClick={refreshDriveFiles}
+                className="h-10 px-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${driveBusy ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleGoogleDriveSignOut}
+                className="h-10 px-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Disconnect</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {driveFeedback && (
+          <div
+            className={`rounded-xl border px-3.5 py-2.5 text-xs ${
+              driveFeedback.ok
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            {driveFeedback.text}
+          </div>
+        )}
+
+        {googleUser && hasDriveToken && (
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs font-semibold text-slate-700">
+              <span>Saved Google Drive Files ({driveFiles.length})</span>
+              <span className="font-mono text-[11px] font-normal text-slate-500">
+                Folder: Alex Apparels Planning Backups
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-500 bg-white">
+                    <th className="py-2 px-3.5">Backup File Name</th>
+                    <th className="py-2 px-3.5">Type</th>
+                    <th className="py-2 px-3.5">Last Modified</th>
+                    <th className="py-2 px-3.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {driveFiles.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-6 text-center text-slate-500">
+                        No backups in Google Drive yet. Click &ldquo;Save App &amp; Excel to Google Drive&rdquo; above to create your first cloud snapshot.
+                      </td>
+                    </tr>
+                  ) : (
+                    driveFiles.map((file) => {
+                      const isJson =
+                        file.mimeType === 'application/json' || file.name.endsWith('.json');
+                      return (
+                        <tr key={file.id} className="hover:bg-slate-50">
+                          <td className="py-2.5 px-3.5 font-mono text-slate-900 font-medium">
+                            {file.name}
+                          </td>
+                          <td className="py-2.5 px-3.5 whitespace-nowrap">
+                            <span
+                              className={`px-2 py-0.5 rounded border text-[11px] font-semibold ${
+                                isJson
+                                  ? 'bg-blue-50 border-blue-200 text-blue-800'
+                                  : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                              }`}
+                            >
+                              {isJson ? 'App State (.json)' : 'Excel (.xlsx)'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3.5 font-mono text-slate-600 whitespace-nowrap">
+                            {file.modifiedTime
+                              ? file.modifiedTime.slice(0, 16).replace('T', ' ') + ' UTC'
+                              : '—'}
+                          </td>
+                          <td className="py-2.5 px-3.5 text-right whitespace-nowrap space-x-1.5">
+                            {file.webViewLink && (
+                              <a
+                                href={file.webViewLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-medium"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                <span>Open</span>
+                              </a>
+                            )}
+                            {isJson && (
+                              <button
+                                type="button"
+                                disabled={driveBusy}
+                                onClick={() =>
+                                  setPendingDriveAction({ type: 'restore', file })
+                                }
+                                className="px-2.5 py-1 rounded bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-[11px] font-semibold cursor-pointer"
+                              >
+                                Restore
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={driveBusy}
+                              onClick={() =>
+                                setPendingDriveAction({ type: 'delete', file })
+                              }
+                              aria-label={`Delete ${file.name}`}
+                              className="p-1.5 rounded border border-slate-200 text-slate-500 hover:text-red-700 hover:border-red-200 hover:bg-red-50 align-middle cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Explicit React Confirmation Modal for Drive Restore / Delete / Local Restore */}
+      {pendingDriveAction && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="drive-confirm-title"
+        >
+          <div className="card-3d bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                  pendingDriveAction.type === 'delete'
+                    ? 'bg-red-50 text-red-700 border border-red-200'
+                    : 'bg-blue-50 text-blue-700 border border-blue-200'
+                }`}
+              >
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4
+                  id="drive-confirm-title"
+                  className="font-display text-base font-bold text-slate-900"
+                >
+                  {pendingDriveAction.type === 'delete'
+                    ? 'Delete Backup from Google Drive?'
+                    : pendingDriveAction.type === 'restore'
+                      ? 'Restore App State from Google Drive?'
+                      : 'Restore App State from Local JSON?'}
+                </h4>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  {pendingDriveAction.type === 'delete' ? (
+                    <>
+                      This will permanently delete{' '}
+                      <span className="font-mono font-semibold text-slate-900">
+                        {pendingDriveAction.file.name}
+                      </span>{' '}
+                      from your Google Drive. This cannot be undone.
+                    </>
+                  ) : (
+                    <>
+                      Restoring{' '}
+                      <span className="font-mono font-semibold text-slate-900">
+                        {pendingDriveAction.type === 'restore'
+                          ? pendingDriveAction.file.name
+                          : pendingDriveAction.fileName}
+                      </span>{' '}
+                      will overwrite the current Master Plan, manual Running styles, daily cutting logs, email recipient schedules, and Control Panel rules.
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingDriveAction(null)}
+                className="h-9 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPendingAction}
+                className={`h-9 px-4 rounded-xl text-xs font-semibold text-white cursor-pointer ${
+                  pendingDriveAction.type === 'delete'
+                    ? 'bg-red-700 hover:bg-red-800'
+                    : 'bg-blue-700 hover:bg-blue-800'
+                }`}
+              >
+                {pendingDriveAction.type === 'delete'
+                  ? 'Confirm Delete'
+                  : 'Confirm Restore'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -26,11 +26,13 @@ interface FabricOrderTrackerViewProps {
       fabricNote: string;
     }>
   ) => void;
+  onSetRunningStyle: (recordId: string) => void;
 }
 
 export function FabricOrderTrackerView({
   records,
   onUpdateRecord,
+  onSetRunningStyle,
 }: FabricOrderTrackerViewProps) {
   const foNeededCount = records.filter((r) => r.foRequired).length;
   const pendingQtyCount = records.filter(
@@ -41,8 +43,8 @@ export function FabricOrderTrackerView({
   ).length;
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-      <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+      <div className="px-4 sm:px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-white">
         <div>
           <h2 className="font-display text-sm font-semibold text-slate-900">
             Fabric Order Tracker ({records.length} Line-Wise Allocations)
@@ -106,16 +108,27 @@ export function FabricOrderTrackerView({
                       </div>
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
-                      <div
-                        className={`text-[11px] font-medium ${
-                          rec.lifecycleStage === 'Running'
-                            ? 'text-blue-700'
-                            : rec.lifecycleStage === 'Upcoming (Next)'
-                              ? 'text-teal-700'
-                              : 'text-slate-500'
-                        }`}
-                      >
-                        {rec.lifecycleStage}
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`text-[11px] font-semibold ${
+                            rec.lifecycleStage === 'Running'
+                              ? 'text-blue-700'
+                              : rec.lifecycleStage === 'Upcoming (Next)'
+                                ? 'text-teal-700'
+                                : 'text-slate-500'
+                          }`}
+                        >
+                          {rec.lifecycleStage}
+                        </span>
+                        {rec.lifecycleStage !== 'Running' && !isClosed && (
+                          <button
+                            type="button"
+                            onClick={() => onSetRunningStyle(rec.id)}
+                            className="px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-[10px] font-semibold cursor-pointer"
+                          >
+                            Set Run
+                          </button>
+                        )}
                       </div>
                       <div className="font-mono font-semibold text-slate-900">
                         {rec.pgNumber}
