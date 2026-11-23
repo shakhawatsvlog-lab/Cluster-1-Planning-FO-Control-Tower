@@ -9,6 +9,8 @@ import {
 } from '../shared/plannerTypes.ts';
 import type { EvaluatedPlanningRecord, FactoryName } from '../shared/plannerTypes.ts';
 import { getSmtpStatus } from './emailService.ts';
+const isAiEnabled = (): boolean =>
+  (process.env.AI_ENABLED || '').trim().toLowerCase() !== 'false';
 import { getWorkspaceState } from './workspaceStore.ts';
 
 export type AssistantNavTab =
@@ -235,6 +237,18 @@ function parseAssistantJson(rawText: string): Partial<ShehreenChatResponse> | nu
 export async function askShehreenAssistant(
   req: ShehreenChatRequest
 ): Promise<ShehreenChatResponse> {
+  if (!isAiEnabled()) {
+    return {
+      reply:
+        'Shehreen AI Assistant is temporarily disabled (AI_ENABLED=false). All planning, FO, cutting, and Excel export features continue working normally.',
+      navigateTab: '',
+      filterFactory: '',
+      filterLine: '',
+      searchQuery: '',
+      actionLabel: '',
+    };
+  }
+
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
     throw new Error(

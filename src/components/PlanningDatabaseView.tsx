@@ -9,6 +9,7 @@ type ViewMode = 'line_grouped' | 'flat_table';
 
 interface PlanningDatabaseViewProps {
   records: EvaluatedPlanningRecord[];
+  dateRangeActive?: boolean;
   onUpdateRecord: (
     id: string,
     patch: Partial<{
@@ -22,6 +23,7 @@ interface PlanningDatabaseViewProps {
 
 export function PlanningDatabaseView({
   records,
+  dateRangeActive = false,
   onUpdateRecord,
   onSetRunningStyle,
 }: PlanningDatabaseViewProps) {
@@ -222,7 +224,9 @@ export function PlanningDatabaseView({
 
       {records.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl py-12 text-center text-sm text-slate-500">
-          No records match the current Factory, Line, or Search filters.
+          {dateRangeActive
+            ? 'No records found for selected date range'
+            : 'No records match the current Factory, Line, or Search filters.'}
         </div>
       ) : viewMode === 'line_grouped' ? (
         <div className="space-y-4">

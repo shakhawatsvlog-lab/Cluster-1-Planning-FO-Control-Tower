@@ -44,8 +44,8 @@ import { DEFAULT_CUTTING_SHEET_CONFIG } from './shared/cuttingSheetTypes.ts';
 import type { CuttingSheetSyncConfig } from './shared/cuttingSheetTypes.ts';
 import { Sidebar } from './components/Sidebar.tsx';
 import type { NavTab } from './components/Sidebar.tsx';
-import { FilterToolbar } from './components/FilterToolbar.tsx';
-import type { StageFilter } from './components/FilterToolbar.tsx';
+import { FilterToolbar, isRecordInDateRange } from './components/FilterToolbar.tsx';
+import type { DateRangeFilterValue, StageFilter } from './components/FilterToolbar.tsx';
 import { KpiDashboardView } from './components/KpiDashboardView.tsx';
 import { DailyCuttingEntryView } from './components/DailyCuttingEntryView.tsx';
 import { PlanningDatabaseView } from './components/PlanningDatabaseView.tsx';
@@ -66,6 +66,49 @@ import {
 import { OfflineIndicator } from './components/PWAInstallButton.tsx';
 
 const STORAGE_KEY = 'alex_apparels_cluster1_plan_v2';
+const ADMIN_TOKEN_STORAGE_KEY = 'alex_apparels_admin_session_v1';
+const FILTER_PANEL_STORAGE_KEY = 'alex_apparels_filter_panel_open_v1';
+
+function readStoredFilterExpanded(): boolean {
+  try {
+    if (typeof window === 'undefined') return false;
+    return window.sessionStorage.getItem(FILTER_PANEL_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredFilterExpanded(expanded: boolean): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage.setItem(FILTER_PANEL_STORAGE_KEY, expanded ? 'true' : 'false');
+  } catch {
+    // Ignore storage errors in restricted contexts
+  }
+}
+
+function readStoredAdminToken(): string | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const val = window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+    return val && val.trim() ? val.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAdminToken(token: string | null): void {
+  try {
+    if (typeof window === 'undefined') return;
+    if (token && token.trim()) {
+      window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token.trim());
+    } else {
+      window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage errors in restricted contexts
+  }
+}
 
 const TAB_TITLES: Record<NavTab, string> = {
   dashboard: 'KPI Dashboard & Shortcut Summary',
@@ -104,6 +147,7 @@ interface WorkspaceApiResponse {
   siteConfig?: WebsiteControlConfig;
   cuttingSheetSync?: CuttingSheetSyncConfig;
   adminUnlocked?: boolean;
+  adminToken?: string;
   needsInitialSetup?: boolean;
   appUrl?: string;
 }
@@ -159,6 +203,15 @@ export default function App() {
   const [referenceDateIso, setReferenceDateIso] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
+  const [filterPanelExpanded, setFilterPanelExpanded] = useState<boolean>(() =>
+    readStoredFilterExpanded()
+  );
+  const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilterValue>({
+    field: 'endDateIso',
+    fromIso: '',
+    toIso: '',
+  });
+  const dateRangeActive = Boolean(dateRangeFilter.fromIso || dateRangeFilter.toIso);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [shehreenOpen, setShehreenOpen] = useState(false);
   const [appLinkModalOpen, setAppLinkModalOpen] = useState(false);
@@ -166,10 +219,22 @@ export default function App() {
 
   const headerUploadRef = useRef<HTMLInputElement | null>(null);
   const syncTimerRef = useRef<number | null>(null);
+  const adminTokenRef = useRef<string | null>(readStoredAdminToken());
+  const referenceDateIsoRef = useRef<string>(referenceDateIso);
+  referenceDateIsoRef.current = referenceDateIso;
+
+  const setSessionToken = useCallback((token: string | null) => {
+    const clean = token && token.trim() ? token.trim() : null;
+    adminTokenRef.current = clean;
+    writeStoredAdminToken(clean);
+  }, []);
 
   const buildHeaders = useCallback((includeJson = true): Record<string, string> => {
     const headers: Record<string, string> = {};
     if (includeJson) headers['Content-Type'] = 'application/json';
+    if (adminTokenRef.current) {
+      headers['X-Admin-Token'] = adminTokenRef.current;
+    }
     return headers;
   }, []);
 
@@ -221,9 +286,10 @@ export default function App() {
             }),
           });
           if (res.status === 401 || res.status === 403) {
+            setSessionToken(null);
             setAdminUnlocked(false);
             setBannerMessage(
-              'Admin sign-in is required to save changes to the Control Tower.'
+              'Admin session expired or missing. Please sign in to save changes to the Control Tower.'
             );
           }
         } catch {
@@ -231,7 +297,7 @@ export default function App() {
         }
       }, 250);
     },
-    [buildHeaders]
+    [buildHeaders, setSessionToken]
   );
 
   const loadWorkspaceFromServer = useCallback(async () => {
@@ -247,7 +313,11 @@ export default function App() {
       }
       const data = (await res.json()) as WorkspaceApiResponse;
 
-      setAdminUnlocked(Boolean(data.adminUnlocked));
+      const unlocked = Boolean(data.adminUnlocked);
+      if (!unlocked) {
+        setSessionToken(null);
+      }
+      setAdminUnlocked(unlocked);
       setNeedsInitialSetup(Boolean(data.needsInitialSetup));
       if (data.siteConfig) setSiteConfig(data.siteConfig);
       if (data.cuttingSheetSync) setCuttingSheetSync(data.cuttingSheetSync);
@@ -283,7 +353,7 @@ export default function App() {
                 parsed.meta,
                 normalized,
                 Array.isArray(parsed.cuttingEntries) ? parsed.cuttingEntries : [],
-                referenceDateIso,
+                referenceDateIsoRef.current,
                 true
               );
               setLoading(false);
@@ -319,7 +389,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [buildHeaders, referenceDateIso, syncWorkspaceToServer]);
+  }, [buildHeaders, setSessionToken, syncWorkspaceToServer]);
 
   useEffect(() => {
     loadWorkspaceFromServer();
@@ -897,6 +967,9 @@ export default function App() {
 
   // Control Panel Auth & Admin Handlers
   const applyAuthSuccessState = (data: Partial<WorkspaceApiResponse>) => {
+    if (typeof data.adminToken === 'string' && data.adminToken.trim()) {
+      setSessionToken(data.adminToken);
+    }
     setAdminUnlocked(true);
     setNeedsInitialSetup(false);
     if (data.siteConfig) setSiteConfig(data.siteConfig);
@@ -976,6 +1049,7 @@ export default function App() {
     } catch {
       // Ignore
     }
+    setSessionToken(null);
     setAdminUnlocked(false);
   };
 
@@ -1081,9 +1155,13 @@ export default function App() {
       });
       const data = (await res.json()) as {
         ok?: boolean;
+        adminToken?: string;
         message?: string;
         error?: string;
       };
+      if (data.ok && typeof data.adminToken === 'string' && data.adminToken.trim()) {
+        setSessionToken(data.adminToken);
+      }
       return {
         ok: Boolean(data.ok),
         message: data.message || data.error || 'Failed to update password.',
@@ -1693,6 +1771,7 @@ export default function App() {
       if (selectedLine !== 'ALL' && r.line !== selectedLine) return false;
       if (stageFilter === 'CURRENT_ONLY' && r.lifecycleStage !== 'Running') return false;
       if (stageFilter === 'QUEUED_ONLY' && r.lifecycleStage === 'Running') return false;
+      if (!isRecordInDateRange(r, dateRangeFilter)) return false;
       if (q) {
         const hay =
           `${r.factory} ${r.line} ${r.pgNumber} ${r.style} ${r.nextStyle} ${r.productCategory} ${r.foNumber}`.toLowerCase();
@@ -1700,7 +1779,7 @@ export default function App() {
       }
       return true;
     });
-  }, [evaluatedAll, selectedFactory, selectedLine, stageFilter, searchQuery]);
+  }, [evaluatedAll, selectedFactory, selectedLine, stageFilter, searchQuery, dateRangeFilter]);
 
   const factorySummaries = useMemo(() => {
     return ALLOWED_FACTORIES.map((factory) => {
@@ -2010,6 +2089,14 @@ export default function App() {
             <>
               {activeTab !== 'reminders' && activeTab !== 'control_panel' && (
                 <FilterToolbar
+                  isExpanded={filterPanelExpanded}
+                  onToggleExpanded={() =>
+                    setFilterPanelExpanded((prev) => {
+                      const next = !prev;
+                      writeStoredFilterExpanded(next);
+                      return next;
+                    })
+                  }
                   selectedFactory={selectedFactory}
                   onFactoryChange={handleFactoryChange}
                   selectedLine={selectedLine}
@@ -2021,6 +2108,13 @@ export default function App() {
                   onSearchChange={setSearchQuery}
                   referenceDateIso={referenceDateIso}
                   onReferenceDateChange={handleReferenceDateChange}
+                  dateRangeFilter={dateRangeFilter}
+                  onApplyDateRange={setDateRangeFilter}
+                  onClearDateRange={() =>
+                    setDateRangeFilter((prev) => ({ ...prev, fromIso: '', toIso: '' }))
+                  }
+                  matchedRecordCount={filteredRecords.length}
+                  totalRecordCount={evaluatedAll.length}
                   onUploadPlanFile={handleUploadPlanFile}
                   hasCustomEdits={hasCustomEdits}
                   onResetEdits={handleResetEdits}
@@ -2029,9 +2123,11 @@ export default function App() {
 
               {activeTab === 'dashboard' && (
                 <KpiDashboardView
+                  meta={meta}
                   allRecords={evaluatedAll}
                   shortcutSummaries={shortcutSummaries}
                   referenceDateIso={referenceDateIso}
+                  dateRangeFilter={dateRangeFilter}
                   inputStartOffsetDays={siteConfig.inputStartOffsetDays}
                   upcomingFoOffsetDays={siteConfig.upcomingFoOffsetDays}
                   cuttingAlertDays={siteConfig.cuttingAlertDays}
@@ -2097,6 +2193,7 @@ export default function App() {
               {activeTab === 'database' && (
                 <PlanningDatabaseView
                   records={filteredRecords}
+                  dateRangeActive={dateRangeActive}
                   onUpdateRecord={handleUpdateRecord}
                   onSetRunningStyle={handleSetRunningStyle}
                 />
@@ -2105,6 +2202,7 @@ export default function App() {
               {activeTab === 'tracker' && (
                 <FabricOrderTrackerView
                   records={filteredRecords}
+                  dateRangeActive={dateRangeActive}
                   onUpdateRecord={handleUpdateRecord}
                   onSetRunningStyle={handleSetRunningStyle}
                 />
@@ -2114,6 +2212,7 @@ export default function App() {
                 <ActionListsView
                   mode="fo"
                   records={filteredRecords}
+                  dateRangeActive={dateRangeActive}
                   onUpdateRecord={handleUpdateRecord}
                 />
               )}
@@ -2122,6 +2221,7 @@ export default function App() {
                 <ActionListsView
                   mode="action"
                   records={filteredRecords}
+                  dateRangeActive={dateRangeActive}
                   onUpdateRecord={handleUpdateRecord}
                 />
               )}

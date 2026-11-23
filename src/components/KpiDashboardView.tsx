@@ -9,6 +9,7 @@ import {
   Eye,
   EyeOff,
   Factory,
+  FileSpreadsheet,
   Mail,
   RotateCcw,
   Send,
@@ -28,6 +29,7 @@ import type {
   EvaluatedPlanningRecord,
   FactoryName,
   LineShortcutSummary,
+  MasterPlanMeta,
   PgFoChecklistItem,
 } from '../shared/plannerTypes.ts';
 import {
@@ -36,14 +38,18 @@ import {
 } from '../shared/reminderTypes.ts';
 import type { ReminderRecipient } from '../shared/reminderTypes.ts';
 import type { NavTab } from './Sidebar.tsx';
+import { isRecordInDateRange } from './FilterToolbar.tsx';
+import type { DateRangeFilterValue } from './FilterToolbar.tsx';
 
 type DashboardTabMode = 'recent_fo' | 'set_running' | 'all_running';
 type PgFoFilterMode = 'recent' | 'all' | 'released';
 
 interface KpiDashboardViewProps {
+  meta?: MasterPlanMeta | null;
   allRecords: EvaluatedPlanningRecord[];
   shortcutSummaries: LineShortcutSummary[];
   referenceDateIso: string;
+  dateRangeFilter?: DateRangeFilterValue | null;
   inputStartOffsetDays?: number;
   upcomingFoOffsetDays?: number;
   cuttingAlertDays?: number;
@@ -130,10 +136,34 @@ function getOutputStartCountdown(days: number | null): {
   };
 }
 
+function getCompactSummaryFoStatus(rec: EvaluatedPlanningRecord): {
+  label: 'Pending' | 'Under Process' | 'Completed';
+  badgeClass: string;
+} {
+  if (rec.isFullQtyReleased || rec.foStatus === 'In-House') {
+    return {
+      label: 'Completed',
+      badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    };
+  }
+  if (rec.foStatus === 'FO Raised') {
+    return {
+      label: 'Under Process',
+      badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+    };
+  }
+  return {
+    label: 'Pending',
+    badgeClass: 'bg-red-50 text-red-700 border-red-200',
+  };
+}
+
 export function KpiDashboardView({
+  meta = null,
   allRecords,
   shortcutSummaries,
   referenceDateIso,
+  dateRangeFilter = null,
   inputStartOffsetDays = 10,
   upcomingFoOffsetDays = 15,
   cuttingAlertDays = 10,
@@ -177,6 +207,8 @@ export function KpiDashboardView({
   const [emailBodyInput, setEmailBodyInput] = useState<string>(DEFAULT_SAVED_FO_EMAIL_BODY);
   const [attachXlsxInput, setAttachXlsxInput] = useState(true);
   const [sendingSavedEmail, setSendingSavedEmail] = useState(false);
+  const [downloadingSummaryBoxXlsx, setDownloadingSummaryBoxXlsx] = useState(false);
+  const [summaryBoxDownloadError, setSummaryBoxDownloadError] = useState<string | null>(null);
 
   useEffect(() => {
     setFoOffsetDraft(String(upcomingFoOffsetDays));
@@ -192,6 +224,21 @@ export function KpiDashboardView({
     [inputStartOffsetDays, upcomingFoOffsetDays, cuttingAlertDays]
   );
 
+  const dateRangeActive = Boolean(
+    dateRangeFilter && (dateRangeFilter.fromIso || dateRangeFilter.toIso)
+  );
+
+  const dateMatchedIdSet = useMemo(() => {
+    if (!dateRangeActive || !dateRangeFilter) return null;
+    const ids = new Set<string>();
+    for (const r of allRecords) {
+      if (isRecordInDateRange(r, dateRangeFilter)) {
+        ids.add(r.id);
+      }
+    }
+    return ids;
+  }, [allRecords, dateRangeActive, dateRangeFilter]);
+
   // Full PG-wise checklist across all 4 factories (Running + Upcoming + Released remarks)
   const allPgChecklistItems = useMemo(
     () => buildPgFoChecklistItems(allRecords, shortcutSummaries, referenceDateIso, ruleOpts),
@@ -202,9 +249,12 @@ export function KpiDashboardView({
     return allPgChecklistItems.filter((item) => {
       if (selectedFactory !== 'ALL' && item.factory !== selectedFactory) return false;
       if (selectedLine !== 'ALL' && !item.lines.includes(selectedLine)) return false;
+      if (dateMatchedIdSet && !item.recordIds.some((id) => dateMatchedIdSet.has(id))) {
+        return false;
+      }
       return true;
     });
-  }, [allPgChecklistItems, selectedFactory, selectedLine]);
+  }, [allPgChecklistItems, selectedFactory, selectedLine, dateMatchedIdSet]);
 
   // PG-Wise Total Order Qty & Issue Qty (deduplicated across lines sharing a PG)
   const globalPgSummary = useMemo(
@@ -220,9 +270,15 @@ export function KpiDashboardView({
     return shortcutSummaries.filter((s) => {
       if (selectedFactory !== 'ALL' && s.factory !== selectedFactory) return false;
       if (selectedLine !== 'ALL' && s.line !== selectedLine) return false;
+      if (dateMatchedIdSet) {
+        const hasMatch =
+          (s.runningRecord && dateMatchedIdSet.has(s.runningRecord.id)) ||
+          (s.upcomingRecord && dateMatchedIdSet.has(s.upcomingRecord.id));
+        if (!hasMatch) return false;
+      }
       return true;
     });
-  }, [shortcutSummaries, selectedFactory, selectedLine]);
+  }, [shortcutSummaries, selectedFactory, selectedLine, dateMatchedIdSet]);
 
   const pgRecentNeededCount = useMemo(
     () =>
@@ -344,6 +400,7 @@ export function KpiDashboardView({
     const scoped = allSavedRecords.filter((rec) => {
       if (selectedFactory !== 'ALL' && rec.factory !== selectedFactory) return false;
       if (selectedLine !== 'ALL' && rec.line !== selectedLine) return false;
+      if (dateMatchedIdSet && !dateMatchedIdSet.has(rec.id)) return false;
       return true;
     });
 
@@ -416,6 +473,7 @@ export function KpiDashboardView({
     allSavedRecords,
     selectedFactory,
     selectedLine,
+    dateMatchedIdSet,
     shortcutByLineKey,
     referenceDateIso,
     inputStartOffsetDays,
@@ -449,6 +507,63 @@ export function KpiDashboardView({
     }
     return { savedTotalOrderQty: orderSum, savedTotalIssueQty: issueSum };
   }, [savedBoxRows]);
+
+  const selectedSummaryTotalIssueQty = useMemo(
+    () => savedBoxRows.reduce((sum, item) => sum + (item.issueQty ?? 0), 0),
+    [savedBoxRows]
+  );
+
+  const handleDownloadSummaryBoxXlsx = async () => {
+    if (downloadingSummaryBoxXlsx) return;
+    setSummaryBoxDownloadError(null);
+    setDownloadingSummaryBoxXlsx(true);
+    try {
+      const masterPlanAsOf =
+        meta?.asOfDateRaw || (meta?.asOfDateIso ? formatDisplayDate(meta.asOfDateIso) : '—');
+      const exportRows = savedBoxRows.map((item, idx) => {
+        const rec = item.rec;
+        return {
+          sl: idx + 1,
+          factory: rec.factory,
+          line: rec.line,
+          pgNumber: rec.pgNumber,
+          style: rec.style,
+          issueQty: item.issueQty,
+          status: rec.lifecycleStage === 'Running' ? ('Running' as const) : ('Upcoming' as const),
+          foDateNeededIso: item.foDateNeededIso,
+          foStatus: getCompactSummaryFoStatus(rec).label,
+        };
+      });
+
+      const response = await fetch('/api/export-selected-fo-summary-xlsx', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          masterPlanAsOf,
+          referenceDateIso,
+          rows: exportRows,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Export failed (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `ALEX_FO_Needed_Checklist_${referenceDateIso}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setSummaryBoxDownloadError('Failed to download Summary Box Excel file. Please try again.');
+    } finally {
+      setDownloadingSummaryBoxXlsx(false);
+    }
+  };
 
   const visibleTargetIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1231,16 +1346,20 @@ export function KpiDashboardView({
                   <tr>
                     <td colSpan={9} className="py-12 px-4 text-center space-y-3">
                       <div className="text-sm font-semibold text-slate-800">
-                        {totalRunningSet === 0 && scopedPgItems.length === 0
-                          ? 'No Running Styles have been set manually yet.'
-                          : hideSavedInTopTable && scopedPgItems.length > 0 && pendingTopCount === 0
-                            ? `All ${scopedPgItems.length} PG items are ticked & saved in the bottom box.`
-                            : 'No PG FO items match this filter right now.'}
+                        {dateRangeActive
+                          ? 'No records found for selected date range'
+                          : totalRunningSet === 0 && scopedPgItems.length === 0
+                            ? 'No Running Styles have been set manually yet.'
+                            : hideSavedInTopTable && scopedPgItems.length > 0 && pendingTopCount === 0
+                              ? `All ${scopedPgItems.length} PG items are ticked & saved in the bottom box.`
+                              : 'No PG FO items match this filter right now.'}
                       </div>
                       <p className="text-xs text-slate-500 max-w-md mx-auto">
-                        {totalRunningSet === 0 && scopedPgItems.length === 0
-                          ? 'Click "Set Running Styles" above to pick active styles, or upload your factory Excel/CSV sheet to import PG Qty, Cutting & Summary Remarks.'
-                          : 'Switch filter tabs or check your Saved Box below.'}
+                        {dateRangeActive
+                          ? 'Adjust the From/To Date or Date Field in Planning Filters above, or click Clear Date Filter.'
+                          : totalRunningSet === 0 && scopedPgItems.length === 0
+                            ? 'Click "Set Running Styles" above to pick active styles, or upload your factory Excel/CSV sheet to import PG Qty, Cutting & Summary Remarks.'
+                            : 'Switch filter tabs or check your Saved Box below.'}
                       </p>
                       {totalRunningSet === 0 && (
                         <button
@@ -2108,6 +2227,210 @@ export function KpiDashboardView({
             </table>
           </div>
         )}
+      </section>
+
+      {/* ADDITIONAL EXCEL-STYLE SUMMARY BOX — SELECTED FO NEEDED CHECKLIST (RUNNING + UPCOMING) */}
+      <section
+        id="selected-fo-summary-box"
+        aria-label="Alex Apparels Selected FO Needed Checklist Summary"
+        className="bg-white border border-slate-300 rounded-xl shadow-sm overflow-hidden"
+      >
+        {/* Title & Top Summary Header */}
+        <div className="bg-[#0F172A] text-white px-4 py-3 sm:px-5">
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between xl:justify-start gap-2 sm:gap-4">
+              <h2 className="text-xs sm:text-sm font-bold tracking-wide uppercase">
+                ALEX APPARELS — SELECTED FO NEEDED CHECKLIST (RUNNING + UPCOMING)
+              </h2>
+            </div>
+            <div className="flex flex-wrap items-center justify-between xl:justify-end gap-x-4 gap-y-2 text-[11px] sm:text-xs text-slate-200">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                <div className="inline-flex items-center gap-1.5">
+                  <span className="text-slate-400 font-medium">Master Plan As Of:</span>
+                  <span className="font-mono font-semibold text-white">
+                    {meta?.asOfDateRaw ||
+                      (meta?.asOfDateIso ? formatDisplayDate(meta.asOfDateIso) : '—')}
+                  </span>
+                </div>
+                <span className="hidden sm:inline text-slate-600">|</span>
+                <div className="inline-flex items-center gap-1.5">
+                  <span className="text-slate-400 font-medium">Ref Date:</span>
+                  <span className="font-mono font-semibold text-white">
+                    {formatDisplayDate(referenceDateIso)}
+                  </span>
+                </div>
+                <span className="hidden sm:inline text-slate-600">|</span>
+                <div className="inline-flex items-center gap-1.5 bg-slate-800 border border-slate-700 px-2.5 py-0.5 rounded">
+                  <span className="text-slate-300 font-medium">Selected Items Count:</span>
+                  <span className="font-mono font-bold text-emerald-300 tabular-nums">
+                    {savedBoxRows.length}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleDownloadSummaryBoxXlsx}
+                disabled={downloadingSummaryBoxXlsx}
+                title="Download this Summary Box as Excel (.xlsx)"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-xs font-semibold shadow-sm border border-emerald-500/80 transition-colors cursor-pointer shrink-0"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>
+                  {downloadingSummaryBoxXlsx ? 'Preparing Excel...' : 'Download Excel'}
+                </span>
+              </button>
+            </div>
+          </div>
+          {summaryBoxDownloadError && (
+            <p className="mt-2 text-xs text-red-300 font-medium">{summaryBoxDownloadError}</p>
+          )}
+        </div>
+
+        {/* Compact Excel-Style Responsive Summary Table */}
+        <div className="overflow-x-auto bg-white">
+          <table className="w-full min-w-[780px] text-xs border-collapse">
+            <thead>
+              <tr className="bg-slate-900 text-white border-b border-slate-700 text-[11px] uppercase tracking-wider">
+                <th className="py-2.5 px-2.5 text-center font-semibold border-r border-slate-700/80 w-12">
+                  SL
+                </th>
+                <th className="py-2.5 px-3 text-left font-semibold border-r border-slate-700/80 whitespace-nowrap">
+                  Factory
+                </th>
+                <th className="py-2.5 px-3 text-left font-semibold border-r border-slate-700/80 whitespace-nowrap">
+                  PG # (FO Needed)
+                </th>
+                <th className="py-2.5 px-3 text-left font-semibold border-r border-slate-700/80">
+                  Style / Description
+                </th>
+                <th className="py-2.5 px-3 text-right font-semibold border-r border-slate-700/80 whitespace-nowrap">
+                  Issue Qty (=Order Qty)
+                </th>
+                <th className="py-2.5 px-3 text-center font-semibold border-r border-slate-700/80 whitespace-nowrap">
+                  Status (Running / Upcoming)
+                </th>
+                <th className="py-2.5 px-3 text-center font-semibold border-r border-slate-700/80 whitespace-nowrap">
+                  FO Date Needed
+                </th>
+                <th className="py-2.5 px-3 text-center font-semibold whitespace-nowrap">
+                  FO Status (Pending / Under Process / Completed)
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 bg-white">
+              {savedBoxRows.length === 0 ? (
+                <tr className="bg-white">
+                  <td
+                    colSpan={8}
+                    className="py-6 px-4 text-center text-xs text-slate-500 border-b border-slate-200"
+                  >
+                    No FO items selected yet for the active filter. Tick checkboxes in the{' '}
+                    <span className="font-semibold text-slate-700">
+                      PG-Wise FO Needed Checklist
+                    </span>{' '}
+                    above to populate this summary table.
+                  </td>
+                </tr>
+              ) : (
+                savedBoxRows.map((item, idx) => {
+                  const rec = item.rec;
+                  const stageIsRunning = rec.lifecycleStage === 'Running';
+                  const foSummaryStatus = getCompactSummaryFoStatus(rec);
+
+                  return (
+                    <tr
+                      key={`summary-row-${rec.id}`}
+                      className="bg-white hover:bg-slate-50/90 transition-colors"
+                    >
+                      <td className="py-2 px-2.5 text-center font-mono tabular-nums text-slate-600 border-r border-slate-200">
+                        {idx + 1}
+                      </td>
+                      <td className="py-2 px-3 font-semibold text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                        <div>{rec.factory}</div>
+                        <div className="text-[10px] font-normal text-slate-500">{rec.line}</div>
+                      </td>
+                      <td className="py-2 px-3 font-mono font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                        {rec.pgNumber}
+                      </td>
+                      <td
+                        className="py-2 px-3 text-slate-800 border-r border-slate-200 max-w-[260px] truncate"
+                        title={rec.style}
+                      >
+                        {rec.style}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono font-semibold tabular-nums text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                        {item.issueQty !== null ? (
+                          item.issueQty.toLocaleString()
+                        ) : (
+                          <span className="text-amber-700 font-normal">Pending</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-center border-r border-slate-200 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded border text-[11px] font-semibold ${
+                            stageIsRunning
+                              ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                              : 'bg-sky-50 text-sky-800 border-sky-200'
+                          }`}
+                        >
+                          {stageIsRunning ? 'Running' : 'Upcoming'}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-center font-mono tabular-nums text-slate-800 border-r border-slate-200 whitespace-nowrap">
+                        {formatDisplayDate(item.foDateNeededIso)}
+                      </td>
+                      <td className="py-2 px-3 text-center whitespace-nowrap">
+                        <span
+                          title={
+                            rec.isFullQtyReleased
+                              ? 'Full Qty Released'
+                              : `Current Status: ${rec.foStatus}`
+                          }
+                          className={`inline-flex items-center px-2 py-0.5 rounded border text-[11px] font-semibold ${foSummaryStatus.badgeClass}`}
+                        >
+                          {foSummaryStatus.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+            <tfoot>
+              <tr className="bg-slate-100 border-t-2 border-slate-300 text-slate-900 font-bold">
+                <td
+                  colSpan={2}
+                  className="py-2.5 px-3 text-left text-[11px] uppercase tracking-wider border-r border-slate-200"
+                >
+                  TOTAL
+                </td>
+                <td
+                  colSpan={2}
+                  className="py-2.5 px-3 text-left text-xs border-r border-slate-200 whitespace-nowrap"
+                >
+                  Total Items:{' '}
+                  <span className="font-mono text-slate-900 tabular-nums">
+                    {savedBoxRows.length}
+                  </span>
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                  <div>{selectedSummaryTotalIssueQty.toLocaleString()} Pcs</div>
+                  {savedTotalIssueQty !== selectedSummaryTotalIssueQty && (
+                    <div className="text-[10px] font-normal text-slate-500">
+                      PG Unique: {savedTotalIssueQty.toLocaleString()} Pcs
+                    </div>
+                  )}
+                </td>
+                <td colSpan={3} className="py-2.5 px-3 text-right text-[11px] font-medium text-slate-600">
+                  Total Issue Qty:{' '}
+                  <span className="font-mono font-bold text-slate-900 tabular-nums">
+                    {selectedSummaryTotalIssueQty.toLocaleString()} Pcs
+                  </span>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       </section>
     </div>
   );

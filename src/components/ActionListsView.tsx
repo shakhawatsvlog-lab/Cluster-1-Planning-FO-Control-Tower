@@ -22,6 +22,7 @@ type ActionSubFilter =
 interface ActionListsViewProps {
   mode: 'fo' | 'action';
   records: EvaluatedPlanningRecord[];
+  dateRangeActive?: boolean;
   onUpdateRecord: (
     id: string,
     patch: Partial<{
@@ -33,7 +34,12 @@ interface ActionListsViewProps {
   ) => void;
 }
 
-export function ActionListsView({ mode, records, onUpdateRecord }: ActionListsViewProps) {
+export function ActionListsView({
+  mode,
+  records,
+  dateRangeActive = false,
+  onUpdateRecord,
+}: ActionListsViewProps) {
   const [subFilter, setSubFilter] = useState<ActionSubFilter>('all');
 
   const listRecords = useMemo(() => {
@@ -152,7 +158,9 @@ export function ActionListsView({ mode, records, onUpdateRecord }: ActionListsVi
               {listRecords.length === 0 ? (
                 <tr>
                   <td colSpan={12} className="py-10 text-center text-sm text-slate-500">
-                    No {mode === 'fo' ? 'FO Required' : 'Action Required'} items match the current filters.
+                    {dateRangeActive
+                      ? 'No records found for selected date range'
+                      : `No ${mode === 'fo' ? 'FO Required' : 'Action Required'} items match the current filters.`}
                   </td>
                 </tr>
               ) : (

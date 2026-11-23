@@ -12,6 +12,7 @@ import { ActionMessageDisplay, RiskStatusDisplay } from './StatusCell.tsx';
 
 interface FabricOrderTrackerViewProps {
   records: EvaluatedPlanningRecord[];
+  dateRangeActive?: boolean;
   onUpdateRecord: (
     id: string,
     patch: Partial<{
@@ -31,6 +32,7 @@ interface FabricOrderTrackerViewProps {
 
 export function FabricOrderTrackerView({
   records,
+  dateRangeActive = false,
   onUpdateRecord,
   onSetRunningStyle,
 }: FabricOrderTrackerViewProps) {
@@ -86,7 +88,9 @@ export function FabricOrderTrackerView({
             {records.length === 0 ? (
               <tr>
                 <td colSpan={15} className="py-10 text-center text-sm text-slate-500">
-                  No Fabric Order Tracker records match the active filter.
+                  {dateRangeActive
+                    ? 'No records found for selected date range'
+                    : 'No Fabric Order Tracker records match the active filter.'}
                 </td>
               </tr>
             ) : (

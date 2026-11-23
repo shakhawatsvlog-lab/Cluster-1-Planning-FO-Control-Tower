@@ -153,7 +153,14 @@ export function extractAdminTokenFromRequest(req: express.Request): string | und
 function isRequestHttps(req: express.Request): boolean {
   if (req.secure) return true;
   const xfProto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
-  return xfProto.split(',').some((p) => p.trim() === 'https');
+  if (xfProto.split(',').some((p) => p.trim() === 'https')) return true;
+  const xfScheme = String(req.headers['x-forwarded-scheme'] || '').toLowerCase();
+  if (xfScheme === 'https') return true;
+  const origin = String(req.headers.origin || '').toLowerCase();
+  if (origin.startsWith('https://')) return true;
+  const referer = String(req.headers.referer || '').toLowerCase();
+  if (referer.startsWith('https://')) return true;
+  return false;
 }
 
 export function setAdminSessionCookie(
@@ -169,7 +176,7 @@ export function setAdminSessionCookie(
     'HttpOnly',
     `Max-Age=${maxAgeSec}`,
     https ? 'SameSite=None' : 'SameSite=Lax',
-    ...(https ? ['Secure'] : []),
+    ...(https ? ['Secure', 'Partitioned'] : []),
   ];
   res.setHeader('Set-Cookie', attrs.join('; '));
 }
@@ -182,7 +189,7 @@ export function clearAdminSessionCookie(req: express.Request, res: express.Respo
     'HttpOnly',
     'Max-Age=0',
     https ? 'SameSite=None' : 'SameSite=Lax',
-    ...(https ? ['Secure'] : []),
+    ...(https ? ['Secure', 'Partitioned'] : []),
   ];
   res.setHeader('Set-Cookie', attrs.join('; '));
 }

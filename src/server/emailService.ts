@@ -28,6 +28,8 @@ import type {
   SmtpProviderPreset,
   SmtpSettingsPublic,
 } from '../shared/reminderTypes.ts';
+const isEmailEnabled = (): boolean =>
+  (process.env.EMAIL_ENABLED || '').trim().toLowerCase() !== 'false';
 import { appendReminderDeliveryLog, getStoredSmtpConfig } from './workspaceStore.ts';
 import {
   buildPlanningWorkbookBuffer,
@@ -215,6 +217,14 @@ export function getSmtpStatus(): SmtpSettingsPublic {
 }
 
 export async function verifySmtpConnection(): Promise<{ ok: boolean; message: string }> {
+  if (!isEmailEnabled()) {
+    return {
+      ok: false,
+      message:
+        'Email sending & SMTP verification are temporarily disabled (EMAIL_ENABLED=false). Set EMAIL_ENABLED=true when ready to test SMTP.',
+    };
+  }
+
   const smtp = resolveSmtpConfig();
   if (!smtp) {
     return {
@@ -247,6 +257,14 @@ export async function sendTestEmail(toEmail: string): Promise<{
   smtpResponse?: string;
   message: string;
 }> {
+  if (!isEmailEnabled()) {
+    return {
+      ok: false,
+      message:
+        'Email sending is temporarily disabled (EMAIL_ENABLED=false). No test email was sent.',
+    };
+  }
+
   const smtp = resolveSmtpConfig();
   if (!smtp) {
     return {
@@ -361,6 +379,25 @@ export async function sendShortcutReminderEmails(params: {
     appUrl,
     ruleOptions = {},
   } = params;
+
+  if (!isEmailEnabled()) {
+    return {
+      ok: false,
+      succeededRecipientIds: [],
+      log: {
+        id: `REM-${Date.now().toString(36).toUpperCase()}`,
+        sentAtIso: new Date().toISOString(),
+        triggerType,
+        recipientCount: 0,
+        recipients: [],
+        urgentLineCount: 0,
+        dueSoonLineCount: 0,
+        cutting10dCount: 0,
+        status: 'Failed',
+        message: 'Email reminders are temporarily disabled (EMAIL_ENABLED=false).',
+      },
+    };
+  }
 
   const activeRecipients = recipients.filter((r) => r.active);
   const recipientEmails = activeRecipients.map((r) => r.email);
@@ -525,6 +562,14 @@ export async function sendAdminVerificationCodeEmail(params: {
   code: string;
   expiresMinutes: number;
 }): Promise<{ ok: boolean; smtpMissing?: boolean; message: string }> {
+  if (!isEmailEnabled()) {
+    return {
+      ok: false,
+      message:
+        'Email sending is temporarily disabled (EMAIL_ENABLED=false). Enable EMAIL_ENABLED=true with SMTP settings to send verification codes.',
+    };
+  }
+
   const smtp = resolveSmtpConfig();
   if (!smtp) {
     return {
@@ -593,6 +638,7 @@ export async function sendAdminVerificationCodeEmail(params: {
 }
 
 export async function sendPasswordChangedNoticeEmail(toEmail: string): Promise<void> {
+  if (!isEmailEnabled()) return;
   const smtp = resolveSmtpConfig();
   if (!smtp) return;
   try {
@@ -648,6 +694,14 @@ export async function sendSavedUpcomingFoEmail(params: {
     appUrl,
     ruleOptions = {},
   } = params;
+
+  if (!isEmailEnabled()) {
+    return {
+      ok: false,
+      message:
+        'Outgoing email is temporarily disabled (EMAIL_ENABLED=false). Set EMAIL_ENABLED=true when ready to send emails.',
+    };
+  }
 
   const inputOffset = Math.max(1, ruleOptions.inputStartOffsetDays ?? 10);
   const foOffset = Math.max(1, ruleOptions.upcomingFoOffsetDays ?? 15);

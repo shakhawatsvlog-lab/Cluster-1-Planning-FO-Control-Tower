@@ -1711,3 +1711,218 @@ export async function buildSelectedUpcomingFoWorkbookBuffer(params: {
   return Buffer.from(arrayBuffer);
 }
 
+export interface SelectedFoSummaryBoxRow {
+  sl: number;
+  factory: string;
+  line?: string;
+  pgNumber: string;
+  style: string;
+  issueQty: number | null;
+  status: 'Running' | 'Upcoming';
+  foDateNeededIso: string | null;
+  foStatus: 'Pending' | 'Under Process' | 'Completed';
+}
+
+export async function buildSelectedFoSummaryBoxWorkbookBuffer(params: {
+  masterPlanAsOf: string;
+  referenceDateIso: string;
+  rows: SelectedFoSummaryBoxRow[];
+}): Promise<Buffer> {
+  const { masterPlanAsOf, referenceDateIso, rows } = params;
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Alex Apparels — Cluster 1 Planning Control Tower';
+  workbook.created = new Date();
+  workbook.calcProperties.fullCalcOnLoad = true;
+
+  const ws = workbook.addWorksheet('Selected FO Summary', {
+    views: [{ state: 'frozen', ySplit: 4 }],
+    properties: { tabColor: { argb: COLORS.navyDark } },
+  });
+
+  // Row 1: Title Banner
+  ws.mergeCells('A1:H1');
+  const titleCell = ws.getCell('A1');
+  titleCell.value = 'ALEX APPARELS — SELECTED FO NEEDED CHECKLIST (RUNNING + UPCOMING)';
+  titleCell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: COLORS.white } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.navyDark } };
+  titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  ws.getRow(1).height = 28;
+
+  // Row 2: Top Summary Strip
+  const refDateObj = isoToUtcDate(referenceDateIso);
+  const refDateLabel = refDateObj
+    ? `${String(refDateObj.getUTCDate()).padStart(2, '0')}-${
+        ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][
+          refDateObj.getUTCMonth()
+        ]
+      }-${String(refDateObj.getUTCFullYear()).slice(-2)}`
+    : referenceDateIso;
+
+  ws.mergeCells('A2:H2');
+  const metaCell = ws.getCell('A2');
+  metaCell.value = `Master Plan As Of: ${masterPlanAsOf || '—'}   |   Ref Date: ${refDateLabel}   |   Selected Items Count: ${rows.length}`;
+  metaCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLORS.navyDark } };
+  metaCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.slateLight } };
+  metaCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  metaCell.border = THIN_BORDER;
+  ws.getRow(2).height = 22;
+
+  // Row 3: Spacer
+  ws.getRow(3).height = 8;
+
+  // Row 4: Dark Navy Column Headers (8 columns)
+  const headers = [
+    'SL',
+    'Factory',
+    'PG # (FO Needed)',
+    'Style / Description',
+    'Issue Qty (=Order Qty)',
+    'Status',
+    'FO Date Needed',
+    'FO Status',
+  ];
+  const headerRow = ws.getRow(4);
+  headerRow.values = headers;
+  styleHeaderRow(headerRow, headers.length, COLORS.navyDark);
+
+  // Data Rows
+  let totalIssueQty = 0;
+  rows.forEach((item, idx) => {
+    const rNum = 5 + idx;
+    const row = ws.getRow(rNum);
+    row.height = 23;
+
+    const qtyVal = typeof item.issueQty === 'number' && Number.isFinite(item.issueQty)
+      ? Math.round(item.issueQty)
+      : null;
+    if (qtyVal !== null) {
+      totalIssueQty += qtyVal;
+    }
+
+    const factoryDisplay = item.line ? `${item.factory} · ${item.line}` : item.factory;
+    const foDateVal = isoToUtcDate(item.foDateNeededIso);
+
+    row.getCell(1).value = idx + 1;
+    row.getCell(2).value = factoryDisplay;
+    row.getCell(3).value = item.pgNumber || '—';
+    row.getCell(4).value = item.style || '—';
+    row.getCell(5).value = qtyVal !== null ? qtyVal : 'Pending';
+    if (qtyVal !== null) {
+      row.getCell(5).numFmt = '#,##0';
+    }
+    row.getCell(6).value = item.status;
+    row.getCell(7).value = foDateVal ?? '—';
+    if (foDateVal) {
+      row.getCell(7).numFmt = 'dd-mmm-yy';
+    }
+    row.getCell(8).value = item.foStatus;
+
+    for (let c = 1; c <= headers.length; c++) {
+      const cell = row.getCell(c);
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.white } };
+      cell.border = THIN_BORDER;
+      cell.font = {
+        name: 'Calibri',
+        size: 10,
+        bold: c === 2 || c === 3 || c === 5,
+        color: { argb: COLORS.textPrimary },
+      };
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal:
+          c === 1 || c === 6 || c === 7 || c === 8
+            ? 'center'
+            : c === 5 && qtyVal !== null
+              ? 'right'
+              : c === 5
+                ? 'center'
+                : 'left',
+        wrapText: c === 4,
+      };
+    }
+
+    // Subtle status text highlight on white cells
+    const stageCell = row.getCell(6);
+    stageCell.font = {
+      name: 'Calibri',
+      size: 10,
+      bold: true,
+      color: { argb: item.status === 'Running' ? 'FF3730A3' : 'FF0369A1' },
+    };
+
+    const foCell = row.getCell(8);
+    foCell.font = {
+      name: 'Calibri',
+      size: 10,
+      bold: true,
+      color: {
+        argb:
+          item.foStatus === 'Completed'
+            ? COLORS.greenText
+            : item.foStatus === 'Under Process'
+              ? COLORS.amberText
+              : COLORS.redText,
+      },
+    };
+  });
+
+  const dataLastRow = Math.max(4, 4 + rows.length);
+  ws.autoFilter = {
+    from: { row: 4, column: 1 },
+    to: { row: dataLastRow, column: headers.length },
+  };
+
+  // Bottom Total Row
+  const totRowNum = dataLastRow + 1;
+  const totRow = ws.getRow(totRowNum);
+  totRow.height = 25;
+  totRow.getCell(1).value = 'TOTAL';
+  totRow.getCell(2).value = `TOTAL ITEMS: ${rows.length}`;
+  totRow.getCell(3).value = '';
+  totRow.getCell(4).value = 'TOTAL ISSUE QTY';
+  totRow.getCell(5).value =
+    rows.length > 0
+      ? {
+          formula: `SUM(E5:E${dataLastRow})`,
+          result: totalIssueQty,
+        }
+      : 0;
+  totRow.getCell(5).numFmt = '#,##0';
+  totRow.getCell(6).value = `${rows.filter((r) => r.status === 'Running').length} Running / ${
+    rows.filter((r) => r.status === 'Upcoming').length
+  } Upcoming`;
+  totRow.getCell(7).value = '';
+  totRow.getCell(8).value = `${rows.filter((r) => r.foStatus === 'Completed').length} Completed`;
+
+  for (let c = 1; c <= headers.length; c++) {
+    const cell = totRow.getCell(c);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.slateLight } };
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: COLORS.navyDark } };
+    cell.border = {
+      top: { style: 'medium', color: { argb: COLORS.navyDark } },
+      left: { style: 'thin', color: { argb: COLORS.slateBorder } },
+      bottom: { style: 'medium', color: { argb: COLORS.navyDark } },
+      right: { style: 'thin', color: { argb: COLORS.slateBorder } },
+    };
+    cell.alignment = {
+      vertical: 'middle',
+      horizontal: c === 4 || c === 5 ? 'right' : c === 1 || c >= 6 ? 'center' : 'left',
+    };
+  }
+
+  ws.columns = [
+    { width: 7 },  // SL
+    { width: 20 }, // Factory
+    { width: 18 }, // PG # (FO Needed)
+    { width: 38 }, // Style / Description
+    { width: 22 }, // Issue Qty (=Order Qty)
+    { width: 14 }, // Status
+    { width: 16 }, // FO Date Needed
+    { width: 16 }, // FO Status
+  ];
+
+  const arrayBuffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+

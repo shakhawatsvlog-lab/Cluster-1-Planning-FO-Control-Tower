@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import crypto from 'crypto';
+import http from 'http';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -27,7 +28,9 @@ import type {
 } from './src/shared/cuttingSheetTypes.ts';
 import {
   buildPlanningWorkbookBuffer,
+  buildSelectedFoSummaryBoxWorkbookBuffer,
   buildSelectedUpcomingFoWorkbookBuffer,
+  type SelectedFoSummaryBoxRow,
 } from './src/server/xlsxBuilder.ts';
 import {
   addReminderRecipient,
@@ -401,6 +404,7 @@ async function startServer() {
         ...pub,
         smtpStatus: getSmtpStatus(),
         adminUnlocked: true,
+        adminToken: token,
         recoveryEmail: pub.siteConfig.recoveryEmail,
       });
     } catch (error) {
@@ -466,6 +470,7 @@ async function startServer() {
       ...pub,
       smtpStatus: getSmtpStatus(),
       adminUnlocked: true,
+      adminToken: token,
       recoveryEmail: pub.siteConfig.recoveryEmail,
     });
   };
@@ -681,8 +686,9 @@ async function startServer() {
 
     // Issue fresh signed session cookie matching updated password version
     const updatedAt = getAdminAuthUpdatedAtIso();
+    let freshToken: string | undefined;
     if (updatedAt) {
-      const freshToken = createSignedAdminSessionToken(updatedAt);
+      freshToken = createSignedAdminSessionToken(updatedAt);
       setAdminSessionCookie(req, res, freshToken);
     }
 
@@ -690,6 +696,7 @@ async function startServer() {
 
     res.json({
       ok: true,
+      adminToken: freshToken,
       message: `Control Panel password updated successfully. Confirmation sent to ${notifyEmail}.`,
     });
   });
@@ -1501,6 +1508,81 @@ async function startServer() {
     }
   });
 
+  app.post('/api/export-selected-fo-summary-xlsx', async (req, res) => {
+    try {
+      const body = req.body as {
+        masterPlanAsOf?: unknown;
+        referenceDateIso?: unknown;
+        rows?: unknown;
+      };
+
+      const state = getWorkspaceState();
+      const rawRef =
+        typeof body?.referenceDateIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.referenceDateIso)
+          ? body.referenceDateIso
+          : state.referenceDateIso || new Date().toISOString().slice(0, 10);
+
+      const masterPlanAsOf =
+        typeof body?.masterPlanAsOf === 'string' && body.masterPlanAsOf.trim()
+          ? body.masterPlanAsOf.trim().slice(0, 60)
+          : state.meta.asOfDateRaw || state.meta.asOfDateIso || '—';
+
+      const inputRows = Array.isArray(body?.rows) ? body.rows.slice(0, 2000) : [];
+      const sanitizedRows: SelectedFoSummaryBoxRow[] = inputRows.map((entry, idx) => {
+        const row = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+        const rawQty = row.issueQty;
+        const issueQty =
+          typeof rawQty === 'number' && Number.isFinite(rawQty) && rawQty >= 0
+            ? Math.round(rawQty)
+            : null;
+        const foDateNeededIso =
+          typeof row.foDateNeededIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.foDateNeededIso)
+            ? row.foDateNeededIso
+            : null;
+        const status: 'Running' | 'Upcoming' = row.status === 'Running' ? 'Running' : 'Upcoming';
+        const foStatus: 'Pending' | 'Under Process' | 'Completed' =
+          row.foStatus === 'Completed'
+            ? 'Completed'
+            : row.foStatus === 'Under Process'
+              ? 'Under Process'
+              : 'Pending';
+
+        return {
+          sl: idx + 1,
+          factory: typeof row.factory === 'string' ? row.factory.trim().slice(0, 40) : '—',
+          line: typeof row.line === 'string' ? row.line.trim().slice(0, 40) : '',
+          pgNumber: typeof row.pgNumber === 'string' ? row.pgNumber.trim().slice(0, 40) : '—',
+          style: typeof row.style === 'string' ? row.style.trim().slice(0, 200) : '—',
+          issueQty,
+          status,
+          foDateNeededIso,
+          foStatus,
+        };
+      });
+
+      const buffer = await buildSelectedFoSummaryBoxWorkbookBuffer({
+        masterPlanAsOf,
+        referenceDateIso: rawRef,
+        rows: sanitizedRows,
+      });
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="ALEX_FO_Needed_Checklist_${rawRef}.xlsx"`
+      );
+      res.send(buffer);
+    } catch (error) {
+      console.error('Export selected FO summary box POST failed:', error);
+      res
+        .status(500)
+        .json({ error: toSafeClientError(error, 'Failed to export summary Excel file.') });
+    }
+  });
+
   app.post('/api/assistant/chat', assistantLimiter, async (req, res) => {
     try {
       const body = req.body as {
@@ -1550,10 +1632,36 @@ async function startServer() {
     res.status(404).json({ error: 'API endpoint not found' });
   });
 
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
+    const hmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: hmrDisabled ? false : { server: httpServer },
+      },
+      plugins: hmrDisabled
+        ? [
+            {
+              name: 'disable-hmr-client-ws',
+              enforce: 'post',
+              transform(code, id) {
+                if (
+                  id.includes('/vite/dist/client/client.mjs') ||
+                  code.includes('transport.connect(createHMRHandler(handleMessage))')
+                ) {
+                  return code.replace(
+                    'transport.connect(createHMRHandler(handleMessage));',
+                    '/* HMR WebSocket disabled via DISABLE_HMR=true */'
+                  );
+                }
+                return null;
+              },
+            },
+          ]
+        : [],
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -1666,7 +1774,7 @@ async function startServer() {
   setInterval(runScheduledCuttingSheetCheck, 30_000);
 
   const port = Number(process.env.PORT) || 3000;
-  app.listen(port, '0.0.0.0', () => {
+  httpServer.listen(port, '0.0.0.0', () => {
     console.log(`Planning Control Tower server listening on port ${port}`);
   });
 }
