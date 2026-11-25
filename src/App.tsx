@@ -64,6 +64,7 @@ import {
   resolveBaseAppLinks,
 } from './components/AppLinkModal.tsx';
 import { OfflineIndicator } from './components/PWAInstallButton.tsx';
+import { apiUrl } from './lib/apiBase.ts';
 
 const STORAGE_KEY = 'alex_apparels_cluster1_plan_v2';
 const ADMIN_TOKEN_STORAGE_KEY = 'alex_apparels_admin_session_v1';
@@ -273,7 +274,7 @@ export default function App() {
       }
       syncTimerRef.current = window.setTimeout(async () => {
         try {
-          const res = await fetch('/api/workspace', {
+          const res = await fetch(apiUrl('/api/workspace'), {
             method: 'PUT',
             credentials: 'include',
             headers: buildHeaders(true),
@@ -304,7 +305,7 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/workspace', {
+      const res = await fetch(apiUrl('/api/workspace'), {
         credentials: 'include',
         headers: buildHeaders(false),
       });
@@ -415,7 +416,7 @@ export default function App() {
     const timer = window.setInterval(async () => {
       if (syncTimerRef.current) return;
       try {
-        const res = await fetch('/api/workspace', {
+        const res = await fetch(apiUrl('/api/workspace'), {
           credentials: 'include',
           headers: buildHeaders(false),
         });
@@ -784,7 +785,7 @@ export default function App() {
       try {
         setBannerMessage(`Reading Excel workbook "${file.name}"...`);
         const base64 = await readFileAsBase64(file);
-        const res = await fetch('/api/master-plan/parse-xlsx', {
+        const res = await fetch(apiUrl('/api/master-plan/parse-xlsx'), {
           method: 'POST',
           credentials: 'include',
           headers: buildHeaders(true),
@@ -828,7 +829,7 @@ export default function App() {
     localStorage.removeItem(STORAGE_KEY);
     setBannerMessage(null);
     try {
-      const res = await fetch('/api/workspace/reset', {
+      const res = await fetch(apiUrl('/api/workspace/reset'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(false),
@@ -856,7 +857,7 @@ export default function App() {
     setExporting(true);
     setBannerMessage(null);
     try {
-      const response = await fetch('/api/export-xlsx', {
+      const response = await fetch(apiUrl('/api/export-xlsx'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -886,7 +887,7 @@ export default function App() {
   const handleDownloadSelectedFoXlsx = async (selectedIds?: string[]): Promise<boolean> => {
     if (!meta || records.length === 0) return false;
     try {
-      const response = await fetch('/api/export-selected-fo-xlsx', {
+      const response = await fetch(apiUrl('/api/export-selected-fo-xlsx'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -929,7 +930,7 @@ export default function App() {
       return { ok: false, message: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch('/api/saved-fo/send-email', {
+      const res = await fetch(apiUrl('/api/saved-fo/send-email'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -983,7 +984,7 @@ export default function App() {
     password: string
   ): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const res = await fetch('/api/admin/unlock', {
+      const res = await fetch(apiUrl('/api/admin/unlock'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -1012,7 +1013,7 @@ export default function App() {
     recoveryEmail?: string;
   }): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const res = await fetch('/api/admin/bootstrap', {
+      const res = await fetch(apiUrl('/api/admin/bootstrap'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -1034,7 +1035,7 @@ export default function App() {
 
   const handleLockControlPanel = async () => {
     try {
-      const res = await fetch('/api/admin/lock', {
+      const res = await fetch(apiUrl('/api/admin/lock'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(false),
@@ -1057,7 +1058,7 @@ export default function App() {
     patch: Partial<WebsiteControlConfig>
   ): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const res = await fetch('/api/admin/site-config', {
+      const res = await fetch(apiUrl('/api/admin/site-config'), {
         method: 'PUT',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1091,7 +1092,7 @@ export default function App() {
       return { ok: false, error: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch('/api/planning-rules', {
+      const res = await fetch(apiUrl('/api/planning-rules'), {
         method: 'PUT',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1118,7 +1119,7 @@ export default function App() {
     message: string;
   }> => {
     try {
-      const res = await fetch('/api/admin/password/request-code', {
+      const res = await fetch(apiUrl('/api/admin/password/request-code'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(false),
@@ -1147,7 +1148,7 @@ export default function App() {
     newPassword: string;
   }): Promise<{ ok: boolean; message: string }> => {
     try {
-      const res = await fetch('/api/admin/password/change', {
+      const res = await fetch(apiUrl('/api/admin/password/change'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1173,7 +1174,7 @@ export default function App() {
 
   const handleDownloadBackup = async () => {
     try {
-      const res = await fetch('/api/admin/backup', {
+      const res = await fetch(apiUrl('/api/admin/backup'), {
         credentials: 'include',
         headers: buildHeaders(false),
       });
@@ -1194,7 +1195,7 @@ export default function App() {
 
   const handleGetBackupJson = async (): Promise<string | null> => {
     try {
-      const res = await fetch('/api/admin/backup', {
+      const res = await fetch(apiUrl('/api/admin/backup'), {
         credentials: 'include',
         headers: buildHeaders(false),
       });
@@ -1208,7 +1209,7 @@ export default function App() {
   const handleGetXlsxBlob = async (): Promise<Blob | null> => {
     if (!meta || records.length === 0) return null;
     try {
-      const response = await fetch('/api/export-xlsx', {
+      const response = await fetch(apiUrl('/api/export-xlsx'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -1225,7 +1226,7 @@ export default function App() {
     snapshot: unknown
   ): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const res = await fetch('/api/admin/restore', {
+      const res = await fetch(apiUrl('/api/admin/restore'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1283,7 +1284,7 @@ export default function App() {
       return { ok: false, error: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch('/api/cutting-sheet/config', {
+      const res = await fetch(apiUrl('/api/cutting-sheet/config'), {
         method: 'PUT',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1319,7 +1320,7 @@ export default function App() {
       return { ok: false, message: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch('/api/cutting-sheet/sync', {
+      const res = await fetch(apiUrl('/api/cutting-sheet/sync'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(false),
@@ -1392,7 +1393,7 @@ export default function App() {
         payload.base64 = await readFileAsBase64(file);
       }
 
-      const res = await fetch('/api/cutting-sheet/upload', {
+      const res = await fetch(apiUrl('/api/cutting-sheet/upload'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1448,7 +1449,7 @@ export default function App() {
       schedule: { ...prev.schedule, ...patch },
     }));
     try {
-      const res = await fetch('/api/reminders/schedule', {
+      const res = await fetch(apiUrl('/api/reminders/schedule'), {
         method: 'PUT',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1482,7 +1483,7 @@ export default function App() {
       return { ok: false, error: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch('/api/reminders/smtp', {
+      const res = await fetch(apiUrl('/api/reminders/smtp'), {
         method: 'PUT',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1509,7 +1510,7 @@ export default function App() {
       return { ok: false, message: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch('/api/reminders/smtp/verify', {
+      const res = await fetch(apiUrl('/api/reminders/smtp/verify'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(false),
@@ -1538,7 +1539,7 @@ export default function App() {
       return { ok: false, message: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch('/api/reminders/smtp/test-email', {
+      const res = await fetch(apiUrl('/api/reminders/smtp/test-email'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1566,7 +1567,7 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch('/api/reminders/smtp', {
+      const res = await fetch(apiUrl('/api/reminders/smtp'), {
         method: 'DELETE',
         credentials: 'include',
         headers: buildHeaders(false),
@@ -1596,7 +1597,7 @@ export default function App() {
       return { ok: false, error: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch('/api/reminders/recipients', {
+      const res = await fetch(apiUrl('/api/reminders/recipients'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1638,7 +1639,7 @@ export default function App() {
       return { ok: false, error: 'Admin sign-in required.' };
     }
     try {
-      const res = await fetch(`/api/reminders/recipients/${encodeURIComponent(id)}`, {
+      const res = await fetch(apiUrl(`/api/reminders/recipients/${encodeURIComponent(id)}`), {
         method: 'PATCH',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1666,7 +1667,7 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch(`/api/reminders/recipients/${encodeURIComponent(id)}`, {
+      const res = await fetch(apiUrl(`/api/reminders/recipients/${encodeURIComponent(id)}`), {
         method: 'DELETE',
         credentials: 'include',
         headers: buildHeaders(false),
@@ -1689,7 +1690,7 @@ export default function App() {
     }
     try {
       if (meta && records.length > 0 && !isEditingLocked) {
-        await fetch('/api/workspace', {
+        await fetch(apiUrl('/api/workspace'), {
           method: 'PUT',
           credentials: 'include',
           headers: buildHeaders(true),
@@ -1703,7 +1704,7 @@ export default function App() {
         });
       }
 
-      const res = await fetch('/api/reminders/send-now', {
+      const res = await fetch(apiUrl('/api/reminders/send-now'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(true),
@@ -1896,7 +1897,7 @@ export default function App() {
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               {!logoError ? (
                 <img
-                  src="/assets/aistudio/OIP__1__63903905.webp"
+                  src={`${import.meta.env.BASE_URL}assets/aistudio/OIP__1__63903905.webp`}
                   alt={siteConfig.companyName}
                   referrerPolicy="no-referrer"
                   onError={() => setLogoError(true)}
@@ -1958,7 +1959,8 @@ export default function App() {
                 const { currentOrigin, sharedTeamOrigin } = resolveBaseAppLinks(appUrl);
                 const primaryUrl = sharedTeamOrigin || currentOrigin;
                 if (primaryUrl) {
-                  const ok = await copyTextWithFallback(`${primaryUrl}/`);
+                  const normalizedUrl = `${primaryUrl.replace(/\/+$/, '')}/`;
+                  const ok = await copyTextWithFallback(normalizedUrl);
                   if (ok) {
                     setHeaderLinkCopied(true);
                     window.setTimeout(() => setHeaderLinkCopied(false), 2500);

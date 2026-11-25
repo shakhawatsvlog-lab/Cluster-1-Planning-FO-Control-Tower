@@ -325,7 +325,7 @@ export function securityHeadersMiddleware(): express.RequestHandler {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' data: https://fonts.gstatic.com",
     "img-src 'self' data: blob: https://*.googleusercontent.com https://*.gstatic.com",
-    "connect-src 'self' https://*.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.firebaseapp.com wss: ws:",
+    "connect-src 'self' https://cluster-1-planning-fo-control-tower-9b844.containers.snapdeploy.app https://shakhawatsvlog-lab.github.io https://*.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://*.firebaseapp.com wss: ws:",
     "frame-src 'self' https://accounts.google.com https://content.googleapis.com https://*.firebaseapp.com",
     "frame-ancestors 'self' https://aistudio.google.com https://*.google.com https://*.googleusercontent.com",
     "base-uri 'self'",
@@ -347,8 +347,13 @@ export function securityHeadersMiddleware(): express.RequestHandler {
   };
 }
 
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://shakhawatsvlog-lab.github.io',
+  'https://cluster-1-planning-fo-control-tower-9b844.containers.snapdeploy.app',
+];
+
 function getAllowedCorsOrigins(req: express.Request): Set<string> {
-  const allowed = new Set<string>();
+  const allowed = new Set<string>(DEFAULT_ALLOWED_ORIGINS);
   const appUrl = (process.env.APP_URL || '').trim();
   if (appUrl && !appUrl.includes('MY_APP_URL')) {
     try {

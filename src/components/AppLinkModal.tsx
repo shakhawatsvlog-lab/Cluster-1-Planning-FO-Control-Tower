@@ -14,6 +14,7 @@ import {
 import type { FactoryName } from '../shared/plannerTypes.ts';
 import type { NavTab } from './Sidebar.tsx';
 import { usePWAInstall } from '../hooks/usePWAInstall.ts';
+import { DEFAULT_BACKEND_URL, stripTrailingSlashes } from '../lib/apiBase.ts';
 
 interface AppLinkModalProps {
   open: boolean;
@@ -55,14 +56,25 @@ export function resolveBaseAppLinks(appUrlFromServer: string): {
   currentOrigin: string;
   sharedTeamOrigin: string | null;
 } {
-  const clientOrigin =
-    typeof window !== 'undefined' && /^https?:\/\//i.test(window.location.origin)
-      ? window.location.origin.replace(/\/+$/, '')
+  const basePath =
+    typeof import.meta !== 'undefined' &&
+    import.meta.env &&
+    typeof import.meta.env.BASE_URL === 'string'
+      ? import.meta.env.BASE_URL.replace(/^\/+|\/+$/g, '')
       : '';
+  const clientHost =
+    typeof window !== 'undefined' && /^https?:\/\//i.test(window.location.origin)
+      ? stripTrailingSlashes(window.location.origin)
+      : '';
+  const clientOrigin = clientHost
+    ? basePath
+      ? `${clientHost}/${basePath}`
+      : clientHost
+    : '';
   const serverOrigin =
     appUrlFromServer && /^https?:\/\//i.test(appUrlFromServer)
-      ? appUrlFromServer.trim().replace(/\/+$/, '')
-      : '';
+      ? stripTrailingSlashes(appUrlFromServer)
+      : stripTrailingSlashes(DEFAULT_BACKEND_URL);
 
   const currentOrigin = clientOrigin || serverOrigin;
   const isDevHost = /^https:\/\/ais-dev-/i.test(currentOrigin);

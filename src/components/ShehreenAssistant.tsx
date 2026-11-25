@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { FactoryName } from '../shared/plannerTypes.ts';
 import type { NavTab } from './Sidebar.tsx';
+import { apiUrl } from '../lib/apiBase.ts';
 
 export interface ShehreenAction {
   navigateTab?: NavTab | '';
@@ -166,7 +167,7 @@ export function ShehreenAssistant({
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 45_000);
 
-      const res = await fetch('/api/assistant/chat', {
+      const res = await fetch(apiUrl('/api/assistant/chat'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

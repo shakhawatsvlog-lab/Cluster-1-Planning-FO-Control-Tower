@@ -166,19 +166,26 @@ function getZonedDateTime(timeZone: string): {
   }
 }
 
+const DEFAULT_PUBLIC_BACKEND_URL =
+  'https://cluster-1-planning-fo-control-tower-9b844.containers.snapdeploy.app';
+
 function getAppPublicUrl(req?: express.Request): string {
-  const envUrl = (process.env.APP_URL || '').trim();
+  const envUrl = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
   if (envUrl && /^https?:\/\//i.test(envUrl) && !envUrl.includes('MY_APP_URL')) {
     return envUrl;
   }
   if (req) {
-    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
+      .split(',')[0]
+      .trim();
+    const host = String(req.headers['x-forwarded-host'] || req.get('host') || '')
+      .split(',')[0]
+      .trim();
     if (host) {
-      return `${proto}://${host}`;
+      return `${proto}://${host}`.replace(/\/+$/, '');
     }
   }
-  return '';
+  return DEFAULT_PUBLIC_BACKEND_URL;
 }
 
 function requireAdmin(req: express.Request, res: express.Response): boolean {
@@ -1667,6 +1674,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
+    app.use('/Cluster-1-Planning-FO-Control-Tower', express.static(distPath));
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

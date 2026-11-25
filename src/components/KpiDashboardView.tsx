@@ -40,6 +40,7 @@ import type { ReminderRecipient } from '../shared/reminderTypes.ts';
 import type { NavTab } from './Sidebar.tsx';
 import { isRecordInDateRange } from './FilterToolbar.tsx';
 import type { DateRangeFilterValue } from './FilterToolbar.tsx';
+import { apiUrl } from '../lib/apiBase.ts';
 
 type DashboardTabMode = 'recent_fo' | 'set_running' | 'all_running';
 type PgFoFilterMode = 'recent' | 'all' | 'released';
@@ -535,7 +536,7 @@ export function KpiDashboardView({
         };
       });
 
-      const response = await fetch('/api/export-selected-fo-summary-xlsx', {
+      const response = await fetch(apiUrl('/api/export-selected-fo-summary-xlsx'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
