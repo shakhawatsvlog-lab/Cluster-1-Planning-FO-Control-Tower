@@ -20,6 +20,11 @@ export default defineConfig(() => {
           'pwa-192x192.png',
           'pwa-512x512.png',
           'pwa-maskable-512x512.png',
+          'master-plan-apple-touch-icon.png',
+          'master-plan-icon.svg',
+          'master-plan-192x192.png',
+          'master-plan-512x512.png',
+          'master-plan-maskable-512x512.png',
         ],
         manifest: {
           id: APP_BASE,
@@ -56,8 +61,12 @@ export default defineConfig(() => {
         workbox: {
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
-          navigateFallbackDenylist: [/^\/api/],
+          navigateFallbackDenylist: [/^\/api/, /^\/Cluster-1-Planning-FO-Control-Tower\/api/],
           runtimeCaching: [
+            {
+              urlPattern: /\/api\//i,
+              handler: 'NetworkOnly',
+            },
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',

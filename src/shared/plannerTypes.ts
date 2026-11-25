@@ -155,6 +155,43 @@ export interface ParsedMasterPlan {
   records: PlanningRecord[];
 }
 
+export interface PublicMasterPlanRecord {
+  id: string;
+  factory: FactoryName;
+  zone: string;
+  line: string;
+  capacityMc: number;
+  productCategory: string;
+  slot: number;
+  orderStatus: OrderStatus;
+  pgNumber: string;
+  style: string;
+  nextStyle: string;
+  styleClassification: StyleClassification;
+  styleQtyHint: number | null;
+  plannedQty: number | null;
+  endDateIso: string | null;
+  triggerDateIso: string | null;
+  newStyleOutputStartIso: string | null;
+  estimatedCuttingFinishIso: string | null;
+  lifecycleStage: LineLifecycleStage;
+  actionMessage: string;
+  riskStatus: string;
+  riskTier: 'plan_qty_pending' | 'critical' | 'high' | 'monitoring' | 'on_track' | 'closed';
+}
+
+export interface PublicMasterPlanResponse {
+  meta: MasterPlanMeta;
+  selectedFactory?: FactoryName | null;
+  records: PublicMasterPlanRecord[];
+  referenceDateIso: string;
+  updatedAtIso: string;
+  branding: {
+    companyName: string;
+    portalTitle: string;
+  };
+}
+
 export const ALLOWED_FACTORIES: FactoryName[] = ['ALEX 1', 'ALEX 3', 'ALEX 5', 'ALEX 12'];
 
 export const FO_STATUS_OPTIONS: FoStatus[] = ['Pending', 'FO Raised', 'In-House', 'Delayed'];

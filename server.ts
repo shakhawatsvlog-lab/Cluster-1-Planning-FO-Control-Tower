@@ -37,6 +37,7 @@ import {
   bootstrapInitialAdminPassword,
   deleteReminderRecipient,
   getAdminAuthUpdatedAtIso,
+  getPublicMasterPlanState,
   getPublicWorkspaceState,
   getSiteConfig,
   getStoredSmtpConfig,
@@ -84,7 +85,6 @@ import {
   extractAdminTokenFromRequest,
   getClientIp,
   recordLoginFailure,
-  redactSmtpStatusForPublic,
   revokeAdminSessionToken,
   securityHeadersMiddleware,
   setAdminSessionCookie,
@@ -243,17 +243,99 @@ async function startServer() {
 
   getWorkspaceState();
 
+  app.get(
+    ['/master-plan.webmanifest', '/Cluster-1-Planning-FO-Control-Tower/master-plan.webmanifest'],
+    (req, res) => {
+      const useBase = req.path.startsWith('/Cluster-1-Planning-FO-Control-Tower/');
+      const startUrl = useBase
+        ? '/Cluster-1-Planning-FO-Control-Tower/master-plan'
+        : '/master-plan';
+      const iconBase = '/Cluster-1-Planning-FO-Control-Tower/';
+      res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        id: startUrl,
+        name: 'Alpine Master Plan',
+        short_name: 'Master Plan',
+        description:
+          'Read-only Four-Factory Live Production Schedule for ALEX 1, ALEX 3, ALEX 5, and ALEX 12.',
+        theme_color: '#0a1633',
+        background_color: '#07132c',
+        display: 'standalone',
+        start_url: startUrl,
+        scope: startUrl,
+        icons: [
+          {
+            src: `${iconBase}master-plan-192x192.png`,
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: `${iconBase}master-plan-512x512.png`,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: `${iconBase}master-plan-maskable-512x512.png`,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      });
+    }
+  );
+
   app.get('/api/health', (_req, res) => {
     const state = getWorkspaceState();
     res.json({
       ok: true,
       totalLines: state.meta.totalLines,
       totalRecords: state.records.length,
-      smtpConfigured: getSmtpStatus().configured,
     });
   });
 
-  app.get('/api/master-plan', (_req, res) => {
+  // Strict read-only public endpoint for external factory users (/master-plan)
+  app.get('/api/public/master-plan', (req, res) => {
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      const state = getWorkspaceState();
+      const factories =
+        Array.isArray(state.meta.factoriesIncluded) && state.meta.factoriesIncluded.length > 0
+          ? state.meta.factoriesIncluded
+          : ALLOWED_FACTORIES;
+
+      const rawFactory = typeof req.query.factory === 'string' ? req.query.factory.trim() : '';
+      const resolveDefault =
+        req.query.resolveDefault === '1' || req.query.resolveDefault === 'true';
+
+      if (rawFactory) {
+        const normalized = rawFactory.replace(/\s+/g, ' ').toUpperCase();
+        const matched = factories.find((f) => f.toUpperCase() === normalized);
+        if (!matched) {
+          res.status(400).json({ error: 'Invalid factory filter.' });
+          return;
+        }
+        res.json(getPublicMasterPlanState(matched));
+        return;
+      }
+
+      if (resolveDefault && factories.length > 0) {
+        res.json(getPublicMasterPlanState(factories[0]));
+        return;
+      }
+
+      res.json(getPublicMasterPlanState());
+    } catch (error) {
+      console.error('GET /api/public/master-plan error:', error);
+      res.status(500).json({ error: 'Failed to load public master plan.' });
+    }
+  });
+
+  app.get('/api/master-plan', (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const state = getWorkspaceState();
       res.json({ meta: state.meta, records: state.records });
@@ -288,15 +370,14 @@ async function startServer() {
   });
 
   app.get('/api/workspace', (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
-      const isAdmin = isAdminAuthorized(req);
-      const pub = getPublicWorkspaceState(isAdmin);
-      const smtpRaw = getSmtpStatus();
+      const pub = getPublicWorkspaceState(true);
       res.json({
         ...pub,
-        smtpStatus: isAdmin ? smtpRaw : redactSmtpStatusForPublic(smtpRaw),
+        smtpStatus: getSmtpStatus(),
         appUrl: getAppPublicUrl(req),
-        adminUnlocked: isAdmin,
+        adminUnlocked: true,
       });
     } catch (error) {
       console.error('GET /api/workspace error:', error);
@@ -363,8 +444,14 @@ async function startServer() {
     res.json({
       unlocked: isAdmin,
       needsInitialSetup: !isAdminPasswordConfigured(),
-      recoveryEmail: isAdmin ? siteConfig.recoveryEmail : '',
-      siteConfig: isAdmin ? siteConfig : { ...siteConfig, recoveryEmail: '' },
+      companyName: siteConfig.companyName,
+      portalTitle: siteConfig.portalTitle,
+      ...(isAdmin
+        ? {
+            recoveryEmail: siteConfig.recoveryEmail,
+            siteConfig,
+          }
+        : {}),
     });
   });
 
@@ -491,11 +578,8 @@ async function startServer() {
       revokeAdminSessionToken(token);
     }
     clearAdminSessionCookie(req, res);
-    const pub = getPublicWorkspaceState(false);
     res.json({
       ok: true,
-      ...pub,
-      smtpStatus: redactSmtpStatusForPublic(getSmtpStatus()),
       adminUnlocked: false,
     });
   };
@@ -782,12 +866,11 @@ async function startServer() {
   // EMAIL REMINDERS & HOSTING SMTP ENDPOINTS
   // =========================================================================
   app.get('/api/reminders', (req, res) => {
-    const isAdmin = isAdminAuthorized(req);
-    const pub = getPublicWorkspaceState(isAdmin);
-    const smtpRaw = getSmtpStatus();
+    if (!requireAdmin(req, res)) return;
+    const pub = getPublicWorkspaceState(true);
     res.json({
       reminders: pub.reminders,
-      smtpStatus: isAdmin ? smtpRaw : redactSmtpStatusForPublic(smtpRaw),
+      smtpStatus: getSmtpStatus(),
       appUrl: getAppPublicUrl(req),
     });
   });
@@ -1192,8 +1275,8 @@ async function startServer() {
   // ONLINE CUTTING SHEET AUTO-SYNC ENDPOINTS
   // =========================================================================
   app.get('/api/cutting-sheet', (req, res) => {
-    const isAdmin = isAdminAuthorized(req);
-    const pub = getPublicWorkspaceState(isAdmin);
+    if (!requireAdmin(req, res)) return;
+    const pub = getPublicWorkspaceState(true);
     res.json({
       cuttingSheetSync: pub.cuttingSheetSync,
     });
@@ -1357,7 +1440,8 @@ async function startServer() {
     }
   });
 
-  app.get('/api/export-xlsx', async (_req, res) => {
+  app.get('/api/export-xlsx', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const state = getWorkspaceState();
       const buffer = await buildPlanningWorkbookBuffer(
@@ -1387,6 +1471,7 @@ async function startServer() {
   });
 
   app.post('/api/export-xlsx', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const body = req.body as {
         meta?: MasterPlanMeta;
@@ -1431,7 +1516,8 @@ async function startServer() {
     }
   });
 
-  app.get('/api/export-selected-fo-xlsx', async (_req, res) => {
+  app.get('/api/export-selected-fo-xlsx', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const state = getWorkspaceState();
       const referenceDateIso = state.referenceDateIso || new Date().toISOString().slice(0, 10);
@@ -1464,6 +1550,7 @@ async function startServer() {
   });
 
   app.post('/api/export-selected-fo-xlsx', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const body = req.body as {
         meta?: MasterPlanMeta;
@@ -1516,6 +1603,7 @@ async function startServer() {
   });
 
   app.post('/api/export-selected-fo-summary-xlsx', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const body = req.body as {
         masterPlanAsOf?: unknown;
@@ -1591,6 +1679,7 @@ async function startServer() {
   });
 
   app.post('/api/assistant/chat', assistantLimiter, async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const body = req.body as {
         message?: string;

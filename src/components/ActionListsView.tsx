@@ -87,7 +87,7 @@ export function ActionListsView({
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:px-5 flex flex-wrap items-center justify-between gap-4 shadow-xs">
+      <div className="ct-surface rounded-2xl p-4 sm:px-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="font-display text-sm font-semibold text-slate-900">
             {mode === 'fo'
@@ -123,10 +123,10 @@ export function ActionListsView({
               key={tab.id}
               type="button"
               onClick={() => setSubFilter(tab.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap cursor-pointer ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all whitespace-nowrap cursor-pointer ${
                 subFilter === tab.id
-                  ? 'bg-blue-600 text-white border-blue-600'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  ? 'bg-gradient-to-r from-[#0a1633] to-cyan-700 text-white border-cyan-700 shadow-xs'
+                  : 'bg-white/90 text-slate-700 border-slate-200 hover:border-cyan-400/50 hover:bg-cyan-50/40'
               }`}
             >
               {tab.label}
@@ -135,11 +135,11 @@ export function ActionListsView({
         </div>
       )}
 
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+      <div className="ct-surface rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50/90 text-xs font-medium text-slate-500">
                 <th className="py-2.5 px-3 text-center whitespace-nowrap">#</th>
                 <th className="py-2.5 px-3 whitespace-nowrap">Factory · Line</th>
                 <th className="py-2.5 px-3 whitespace-nowrap">Stage · PG #</th>
@@ -165,7 +165,7 @@ export function ActionListsView({
                 </tr>
               ) : (
                 listRecords.map((rec, idx) => (
-                  <tr key={rec.id} className="hover:bg-slate-50/80 transition-colors">
+                  <tr key={rec.id} className="hover:bg-cyan-50/35 transition-colors">
                     <td className="py-2.5 px-3 text-center font-mono tabular-nums text-slate-400">
                       {idx + 1}
                     </td>
@@ -208,7 +208,7 @@ export function ActionListsView({
                           })
                         }
                         aria-label={`Order status for ${rec.line} ${rec.style}`}
-                        className="h-8 px-2 text-xs font-medium rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 cursor-pointer"
+                        className="h-8 px-2 text-xs font-medium rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600 cursor-pointer"
                       >
                         {ORDER_STATUS_OPTIONS.map((opt) => (
                           <option key={opt} value={opt}>
@@ -230,7 +230,7 @@ export function ActionListsView({
                           });
                         }}
                         aria-label={`Order qty for ${rec.line} ${rec.style}`}
-                        className={`w-22 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border focus:outline-none focus:ring-2 focus:ring-blue-600 ${
+                        className={`w-22 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border focus:outline-none focus:ring-2 focus:ring-cyan-600 ${
                           rec.plannedQty === null
                             ? 'bg-amber-50/70 border-amber-300 placeholder:text-amber-700/70'
                             : 'bg-white border-slate-300 text-slate-900'
@@ -247,7 +247,7 @@ export function ActionListsView({
                           })
                         }
                         aria-label={`End date for ${rec.line} ${rec.style}`}
-                        className="h-8 px-2 font-mono text-xs rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        className="h-8 px-2 font-mono text-xs rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                       />
                     </td>
                     <td className="py-2.5 px-3 font-mono tabular-nums font-medium whitespace-nowrap text-slate-900">
@@ -271,7 +271,7 @@ export function ActionListsView({
                           onUpdateRecord(rec.id, { foStatus: e.target.value as FoStatus })
                         }
                         aria-label={`FO status for ${rec.line} ${rec.style}`}
-                        className="h-8 px-2 text-xs font-medium rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        className="h-8 px-2 text-xs font-medium rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                       >
                         {FO_STATUS_OPTIONS.map((opt) => (
                           <option key={opt} value={opt}>

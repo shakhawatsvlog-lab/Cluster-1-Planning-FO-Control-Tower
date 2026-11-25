@@ -449,7 +449,7 @@ export function EmailRemindersView({
     <div className="space-y-6">
       {/* Top Row: Automatic Daily Schedule & Website Publishing */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        <section className="xl:col-span-8 bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <section className="xl:col-span-8 ct-surface rounded-2xl p-5 space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <h2 className="font-display text-base font-bold text-slate-900">
@@ -601,7 +601,7 @@ export function EmailRemindersView({
               type="button"
               disabled={sendingNow || activeRecipients.length === 0}
               onClick={() => handleTriggerSend()}
-              className="h-10 px-4 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs sm:text-sm font-medium inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="h-10 px-4 rounded-lg bg-gradient-to-r from-[#0a1633] to-cyan-700 hover:brightness-110 disabled:opacity-50 text-white text-xs sm:text-sm font-medium inline-flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Send className="w-4 h-4 shrink-0" />
               <span>
@@ -663,7 +663,7 @@ export function EmailRemindersView({
         </section>
 
         {/* Publish & Share Website Card */}
-        <section className="xl:col-span-4 bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between space-y-4">
+        <section className="xl:col-span-4 ct-surface rounded-2xl p-5 flex flex-col justify-between space-y-4">
           <div className="space-y-2">
             <h3 className="font-display text-sm font-bold text-slate-900">
               Website Publishing &amp; Live Sync
@@ -715,7 +715,7 @@ export function EmailRemindersView({
 
       {/* Hosting / Sender Email Settings Box */}
       {smtpOpen && (
-        <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <section className="ct-surface rounded-2xl p-5 space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex items-start gap-2.5">
               <Server className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
@@ -955,7 +955,7 @@ export function EmailRemindersView({
 
       {/* Add Email Recipient Form + Editable Recipient Directory */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        <section className="xl:col-span-5 bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <section className="xl:col-span-5 ct-surface rounded-2xl p-5 space-y-4">
           <div>
             <h3 className="font-display text-sm font-bold text-slate-900">
               Add Reminder Email Address
@@ -1135,7 +1135,7 @@ export function EmailRemindersView({
           </form>
         </section>
 
-        <section className="xl:col-span-7 bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+        <section className="xl:col-span-7 ct-surface rounded-2xl overflow-hidden flex flex-col">
           <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between gap-3">
             <div>
               <h3 className="font-display text-sm font-bold text-slate-900">
@@ -1383,7 +1383,7 @@ export function EmailRemindersView({
       </div>
 
       {/* Live Daily Email Digest Preview */}
-      <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <section className="ct-surface rounded-2xl overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50">
           <div>
             <h3 className="font-display text-sm font-bold text-slate-900">
@@ -1519,7 +1519,7 @@ export function EmailRemindersView({
       </section>
 
       {/* Reminder Delivery History */}
-      <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <section className="ct-surface rounded-2xl overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200">
           <h3 className="font-display text-sm font-bold text-slate-900">
             Reminder Delivery Log ({logs.length})

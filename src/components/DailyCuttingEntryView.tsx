@@ -457,11 +457,11 @@ export function DailyCuttingEntryView({
   return (
     <div className="space-y-6">
       {/* Online Cutting Sheet Auto-Sync & Excel Upload Card */}
-      <div className="bg-slate-900 text-white border border-slate-800 rounded-xl p-5 shadow-xs space-y-4">
+      <div className="ct-exec-banner text-white rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center shrink-0">
-              <FileSpreadsheet className="w-5 h-5 text-blue-300" />
+            <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-400/35 flex items-center justify-center shrink-0">
+              <FileSpreadsheet className="w-5 h-5 text-cyan-300" />
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -641,7 +641,7 @@ export function DailyCuttingEntryView({
                 type="button"
                 onClick={() => void handleTriggerSyncNow()}
                 disabled={syncingNow || savingConfig}
-                className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+                className="h-9 px-4 rounded-lg bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${syncingNow ? 'animate-spin' : ''}`} />
                 <span>{syncingNow ? 'Syncing All Links...' : 'Save Links & Sync Now'}</span>
@@ -869,7 +869,7 @@ export function DailyCuttingEntryView({
       </div>
 
       {/* PG-Wise Latest Cutting, Auto-Filled Order Qty & Daily Target Summary */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+      <div className="ct-surface rounded-2xl overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/60">
           <div>
             <h3 className="font-display text-sm font-semibold text-slate-900">
@@ -1049,7 +1049,7 @@ export function DailyCuttingEntryView({
       </div>
 
       {/* Top Form: Manual Cutting Entry (Optional Adjustment) */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+      <div className="ct-surface rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-display text-sm font-semibold text-slate-900">
@@ -1210,7 +1210,7 @@ export function DailyCuttingEntryView({
             <button
               type="submit"
               disabled={!targetRecord}
-              className="w-full h-10 px-4 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              className="w-full h-10 px-4 rounded-lg bg-gradient-to-r from-[#0a1633] to-cyan-700 hover:brightness-110 disabled:opacity-50 text-white text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Save Cutting Entry</span>
@@ -1272,7 +1272,7 @@ export function DailyCuttingEntryView({
       </div>
 
       {/* Quick Line-Wise Daily Cutting & Order Status Sheet */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <div className="ct-surface rounded-2xl overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="font-display text-sm font-semibold text-slate-900">
@@ -1439,7 +1439,7 @@ export function DailyCuttingEntryView({
       </div>
 
       {/* Cutting Log History */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <div className="ct-surface rounded-2xl overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
           <div>
             <h3 className="font-display text-sm font-semibold text-slate-900">

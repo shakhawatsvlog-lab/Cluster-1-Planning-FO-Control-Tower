@@ -127,7 +127,7 @@ export function AppLinkModal({
       params.set('factory', selectedFactory);
     }
     const qs = params.toString();
-    return qs ? `${baseSelectedOrigin}/?${qs}` : `${baseSelectedOrigin}/`;
+    return qs ? `${baseSelectedOrigin}/control-tower?${qs}` : `${baseSelectedOrigin}/control-tower`;
   }, [baseSelectedOrigin, includeCurrentView, activeTab, selectedFactory]);
 
   useEffect(() => {

@@ -296,7 +296,7 @@ export function FoChecklistView({
     <div className="space-y-6">
       {/* Top Summary KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+        <div className="ct-surface rounded-2xl p-4">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-slate-500">Pending FO Checklist</span>
             <span className="w-2 h-2 rounded-full bg-amber-500" />
@@ -313,12 +313,12 @@ export function FoChecklistView({
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+        <div className="ct-surface rounded-2xl p-4">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-slate-500">Issued &amp; Checked (OK Saved)</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-600" />
+            <span className="w-2 h-2 rounded-full bg-teal-600" />
           </div>
-          <div className="mt-1.5 font-mono text-2xl font-bold text-emerald-700 tabular-nums">
+          <div className="mt-1.5 font-mono text-2xl font-bold text-teal-700 tabular-nums">
             {confirmedItems.length}
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
@@ -326,12 +326,12 @@ export function FoChecklistView({
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+        <div className="ct-surface rounded-2xl p-4">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-slate-500">Total FO Qty Issued (Saved)</span>
-            <span className="w-2 h-2 rounded-full bg-blue-600" />
+            <span className="w-2 h-2 rounded-full bg-cyan-600" />
           </div>
-          <div className="mt-1.5 font-mono text-2xl font-bold text-blue-700 tabular-nums">
+          <div className="mt-1.5 font-mono text-2xl font-bold text-cyan-800 tabular-nums">
             {totalConfirmedQty.toLocaleString()}
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
@@ -339,8 +339,8 @@ export function FoChecklistView({
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-white shadow-xs">
-          <div className="text-xs font-medium text-slate-300">Checklist Reference Date</div>
+        <div className="ct-exec-banner rounded-2xl p-4 text-white">
+          <div className="text-xs font-medium text-cyan-200">Checklist Reference Date</div>
           <div className="mt-1.5 font-mono text-xl font-bold text-white tabular-nums">
             {formatDisplayDate(referenceDateIso)}
           </div>
@@ -351,16 +351,16 @@ export function FoChecklistView({
       </div>
 
       {/* Box 1: Weekly Pending Fabric Order Checklist */}
-      <section className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-        <div className="px-4 sm:px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/70">
+      <section className="ct-surface rounded-2xl overflow-hidden">
+        <div className="px-4 sm:px-5 py-4 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3 bg-slate-50/75">
           <div className="flex items-start gap-2.5">
-            <ClipboardCheck className="w-5 h-5 text-blue-700 mt-0.5 shrink-0" />
+            <ClipboardCheck className="w-5 h-5 text-cyan-700 mt-0.5 shrink-0" />
             <div>
               <h2 className="font-display text-sm sm:text-base font-bold text-slate-900">
                 Weekly Fabric Order Checklist ({pendingItems.length} Pending Check)
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Verify this week&rsquo;s Fabric Orders. Enter how much Qty was issued, select Issue Date, and click <span className="font-semibold text-emerald-700">OK</span> to move it into the Saved Box below.
+                Verify this week&rsquo;s Fabric Orders. Enter how much Qty was issued, select Issue Date, and click <span className="font-semibold text-teal-700">OK</span> to move it into the Saved Box below.
               </p>
             </div>
           </div>
@@ -369,9 +369,9 @@ export function FoChecklistView({
             <button
               type="button"
               onClick={() => setWindowMode('this_week')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 windowMode === 'this_week'
-                  ? 'bg-slate-900 text-white'
+                  ? 'bg-gradient-to-r from-[#0a1633] to-cyan-700 text-white'
                   : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
@@ -380,9 +380,9 @@ export function FoChecklistView({
             <button
               type="button"
               onClick={() => setWindowMode('next_14d')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 windowMode === 'next_14d'
-                  ? 'bg-slate-900 text-white'
+                  ? 'bg-gradient-to-r from-[#0a1633] to-cyan-700 text-white'
                   : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
@@ -391,9 +391,9 @@ export function FoChecklistView({
             <button
               type="button"
               onClick={() => setWindowMode('all_open')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 windowMode === 'all_open'
-                  ? 'bg-slate-900 text-white'
+                  ? 'bg-gradient-to-r from-[#0a1633] to-cyan-700 text-white'
                   : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
@@ -559,8 +559,8 @@ export function FoChecklistView({
       </section>
 
       {/* Box 2: Separate Saved OK Box (Confirmed FO Issued History) */}
-      <section className="bg-white rounded-xl overflow-hidden border border-emerald-300 shadow-xs">
-        <div className="px-4 sm:px-5 py-4 border-b border-emerald-200 bg-emerald-50/70 flex flex-wrap items-center justify-between gap-3">
+      <section className="ct-surface rounded-2xl overflow-hidden !border-teal-300/80">
+        <div className="px-4 sm:px-5 py-4 border-b border-teal-200/80 bg-teal-50/55 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-start gap-2.5">
             <CalendarCheck2 className="w-5 h-5 text-emerald-700 mt-0.5 shrink-0" />
             <div>

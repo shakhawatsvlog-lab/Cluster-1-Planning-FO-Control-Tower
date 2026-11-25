@@ -30,6 +30,42 @@
     />
   </head>
   <body class="bg-slate-50 text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900">
+    <script>
+      (function () {
+        try {
+          var base = '/Cluster-1-Planning-FO-Control-Tower';
+          var rawPath = window.location.pathname || '/';
+          var params = new URLSearchParams(window.location.search || '');
+          var pending = params.get('p');
+          var checkPath = pending && pending.charAt(0) === '/' ? pending.split('?')[0] : rawPath;
+          var hasBase = rawPath === base || rawPath.indexOf(base + '/') === 0;
+          var stripped = (checkPath.indexOf(base) === 0 ? checkPath.slice(base.length) : checkPath)
+            .replace(/\/+$/, '')
+            .toLowerCase();
+          if (stripped === '/master-plan' || stripped.indexOf('/master-plan/') === 0) {
+            var manifestHref = hasBase ? base + '/master-plan.webmanifest' : '/master-plan.webmanifest';
+            var manifestLink = document.querySelector('link[rel="manifest"]');
+            if (manifestLink) {
+              manifestLink.setAttribute('href', manifestHref);
+            } else {
+              manifestLink = document.createElement('link');
+              manifestLink.rel = 'manifest';
+              manifestLink.href = manifestHref;
+              document.head.appendChild(manifestLink);
+            }
+            document.title = 'Alpine Master Plan';
+            var appTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+            if (appTitle) appTitle.setAttribute('content', 'Master Plan');
+            var themeMeta = document.querySelector('meta[name="theme-color"]');
+            if (themeMeta) themeMeta.setAttribute('content', '#0a1633');
+            var touchIcon = document.querySelector('link[rel="apple-touch-icon"]');
+            if (touchIcon) touchIcon.setAttribute('href', base + '/master-plan-apple-touch-icon.png');
+            var favIcon = document.querySelector('link[rel="icon"]');
+            if (favIcon) favIcon.setAttribute('href', base + '/master-plan-icon.svg');
+          }
+        } catch (e) {}
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

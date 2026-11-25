@@ -232,9 +232,13 @@ export function ControlPanelView({
   if (!adminUnlocked) {
     return (
       <div className="min-h-[65vh] flex items-center justify-center px-3 sm:px-4">
-        <div className="w-full max-w-md bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-5 shadow-sm">
+        <div className="w-full max-w-md ct-surface rounded-2xl p-6 sm:p-8 space-y-5 shadow-xl relative overflow-hidden">
+          <div
+            className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-[#0a1633] via-cyan-500 to-teal-500"
+            aria-hidden="true"
+          />
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#0a1633] to-cyan-700 text-white flex items-center justify-center shrink-0 shadow-sm">
               <Lock className="w-5 h-5" />
             </div>
             <div>
@@ -304,7 +308,7 @@ export function ControlPanelView({
             <button
               type="submit"
               disabled={unlocking || !passwordInput}
-              className="w-full h-11 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full h-11 px-4 rounded-lg bg-gradient-to-r from-[#0a1633] via-[#122b5c] to-[#0891b2] hover:brightness-110 disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all cursor-pointer"
             >
               <Unlock className="w-4 h-4" />
               <span>
@@ -568,9 +572,9 @@ export function ControlPanelView({
   return (
     <div className="space-y-6">
       {/* Admin Session Banner */}
-      <div className="bg-slate-900 text-white rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
+      <div className="ct-exec-banner text-white rounded-2xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+          <ShieldCheck className="w-5 h-5 text-cyan-300 shrink-0" />
           <div>
             <h2 className="font-display text-base font-bold">
               Master Website Control Panel
@@ -583,23 +587,23 @@ export function ControlPanelView({
         <button
           type="button"
           onClick={onLock}
-          className="h-9 px-3.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-white inline-flex items-center gap-2 transition-colors cursor-pointer"
+          className="h-9 px-3.5 rounded-lg bg-white/10 hover:bg-white/15 border border-cyan-400/30 text-xs font-semibold text-white inline-flex items-center gap-2 transition-colors cursor-pointer"
         >
-          <Lock className="w-3.5 h-3.5" />
+          <Lock className="w-3.5 h-3.5 text-cyan-300" />
           <span>Lock Control Panel</span>
         </button>
       </div>
 
       {/* Overview Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
+        <div className="ct-surface rounded-2xl p-4">
           <div className="text-xs font-medium text-slate-500">Cluster Capacity</div>
           <div className="mt-1.5 font-mono text-xl font-bold text-slate-900 tabular-nums">
             {meta.totalLines} Lines · {meta.totalCapacityMc.toLocaleString()} Mc
           </div>
           <div className="text-xs text-slate-500 mt-1">{records.length} planned slots</div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
+        <div className="ct-surface rounded-2xl p-4">
           <div className="text-xs font-medium text-slate-500">Closed Orders</div>
           <div className="mt-1.5 font-mono text-xl font-bold text-slate-900 tabular-nums">
             {closedRecords.length}
@@ -608,7 +612,7 @@ export function ControlPanelView({
             {cuttingEntries.length} cutting log entries
           </div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
+        <div className="ct-surface rounded-2xl p-4">
           <div className="text-xs font-medium text-slate-500">Public Edit Access</div>
           <div className="mt-1.5 text-sm font-bold text-slate-900">
             {siteConfig.readOnlyPublicMode ? 'Locked (Admin Only)' : 'Team Collaborative'}
@@ -617,7 +621,7 @@ export function ControlPanelView({
             Changeable below anytime
           </div>
         </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
+        <div className="ct-surface rounded-2xl p-4">
           <div className="text-xs font-medium text-slate-500">Daily Email Dispatch</div>
           <div className="mt-1.5 font-mono text-sm font-bold text-slate-900">
             {reminders.schedule.enabled ? `ON · ${reminders.schedule.dailySendTime}` : 'PAUSED'}
@@ -631,7 +635,7 @@ export function ControlPanelView({
       {/* Row 1: Website Settings + Admin Password Security */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
         {/* Website Access, Branding & Planning Rules */}
-        <section className="xl:col-span-7 bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <section className="xl:col-span-7 ct-surface rounded-2xl p-5 space-y-4">
           <div>
             <h3 className="font-display text-sm font-bold text-slate-900">
               Website Access Mode, Branding &amp; Trigger Rules
@@ -776,7 +780,7 @@ export function ControlPanelView({
         </section>
 
         {/* Admin Password Change with Email Verification Code */}
-        <section className="xl:col-span-5 bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <section className="xl:col-span-5 ct-surface rounded-2xl p-5 space-y-4">
           <div className="flex items-start gap-2.5">
             <KeyRound className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
             <div>
@@ -807,7 +811,7 @@ export function ControlPanelView({
               type="button"
               disabled={otpSending || !siteConfig.recoveryEmail}
               onClick={handleRequestOtp}
-              className="w-full h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full h-10 px-4 rounded-lg bg-gradient-to-r from-[#0a1633] to-cyan-700 hover:brightness-110 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all cursor-pointer"
             >
               <Mail className="w-4 h-4" />
               <span>
@@ -932,7 +936,7 @@ export function ControlPanelView({
 
       {/* Row 2: Master Plan Data Operations & Email Automation Quick Control */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        <section className="xl:col-span-7 bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <section className="xl:col-span-7 ct-surface rounded-2xl p-5 space-y-4">
           <div className="flex items-start gap-2.5">
             <Database className="w-4 h-4 text-slate-700 mt-0.5 shrink-0" />
             <div>
@@ -1077,7 +1081,7 @@ export function ControlPanelView({
         </section>
 
         {/* Hosting Email & Daily Reminder Quick Controls */}
-        <section className="xl:col-span-5 bg-white border border-slate-200 rounded-xl p-5 space-y-4 flex flex-col justify-between">
+        <section className="xl:col-span-5 ct-surface rounded-2xl p-5 space-y-4 flex flex-col justify-between">
           <div className="space-y-3">
             <div>
               <h3 className="font-display text-sm font-bold text-slate-900">
@@ -1172,7 +1176,7 @@ export function ControlPanelView({
       </div>
 
       {/* Row 3: Google Drive Cloud Backup & Restore */}
-      <section className="card-3d bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+      <section className="card-3d ct-surface rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-2.5">
             <Cloud className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
@@ -1205,7 +1209,7 @@ export function ControlPanelView({
                 type="button"
                 disabled={driveBusy}
                 onClick={handleSaveBundleToDrive}
-                className="h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer"
+                className="h-10 px-4 rounded-lg bg-gradient-to-r from-[#0a1633] to-cyan-700 hover:brightness-110 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-2 shadow-xs cursor-pointer transition-all"
               >
                 <Cloud className="w-4 h-4" />
                 <span>{driveBusy ? 'Saving to Drive...' : 'Save App & Excel to Google Drive'}</span>

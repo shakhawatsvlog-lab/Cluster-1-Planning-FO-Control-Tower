@@ -14,6 +14,7 @@ import {
 import type { FactoryName } from '../shared/plannerTypes.ts';
 import type { NavTab } from './Sidebar.tsx';
 import { apiUrl } from '../lib/apiBase.ts';
+import { buildAdminHeaders } from '../lib/adminSession.ts';
 
 export interface ShehreenAction {
   navigateTab?: NavTab | '';
@@ -170,7 +171,7 @@ export function ShehreenAssistant({
       const res = await fetch(apiUrl('/api/assistant/chat'), {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildAdminHeaders(true),
         signal: controller.signal,
         body: JSON.stringify({
           message: trimmed,
@@ -281,14 +282,14 @@ export function ShehreenAssistant({
           type="button"
           onClick={() => onToggleOpen(true)}
           aria-label="Open SHEHREEN AI Assistant"
-          className="fixed bottom-4 right-4 z-50 inline-flex items-center gap-2.5 px-4 py-3 rounded-xl bg-slate-900 hover:bg-blue-600 text-white shadow-lg border border-slate-700 transition-colors cursor-pointer group"
+          className="fixed bottom-[max(1rem,env(safe-area-inset-bottom,0px))] right-[max(1rem,env(safe-area-inset-right,0px))] z-40 inline-flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-gradient-to-r from-[#07132c] via-[#0d2147] to-[#0e7490] hover:brightness-110 text-white shadow-[0_14px_32px_-12px_rgba(8,145,178,0.6)] border border-cyan-400/35 transition-all cursor-pointer group touch-manipulation"
         >
-          <span className="w-8 h-8 rounded-lg bg-blue-600 group-hover:bg-white/20 flex items-center justify-center shrink-0">
-            <Sparkles className="w-4 h-4 text-white" />
+          <span className="w-8 h-8 rounded-lg bg-cyan-500/25 border border-cyan-300/35 flex items-center justify-center shrink-0">
+            <Sparkles className="w-4 h-4 text-cyan-200" />
           </span>
           <span className="text-left">
             <span className="block text-xs font-bold tracking-wide leading-none">SHEHREEN AI</span>
-            <span className="block text-[10px] text-slate-300 mt-1 leading-none">
+            <span className="block text-[10px] text-cyan-200/85 mt-1 leading-none">
               Team Friend · Ask Anything
             </span>
           </span>
@@ -298,12 +299,12 @@ export function ShehreenAssistant({
       {open && (
         <aside
           aria-label="SHEHREEN AI Assistant"
-          className="fixed inset-x-3 bottom-3 sm:inset-x-auto sm:bottom-4 sm:right-4 z-50 sm:w-[440px] h-[min(640px,calc(100dvh-2rem))] bg-white border border-slate-200 rounded-xl shadow-2xl flex flex-col overflow-hidden"
+          className="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:inset-x-auto sm:bottom-[max(1rem,env(safe-area-inset-bottom,0px))] sm:right-[max(1rem,env(safe-area-inset-right,0px))] z-50 sm:w-[440px] h-[min(640px,calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-1.5rem))] ct-surface rounded-2xl shadow-2xl flex flex-col overflow-hidden"
         >
           {/* Header */}
-          <div className="bg-slate-900 text-white px-4 py-3.5 flex items-center justify-between gap-3 shrink-0">
+          <div className="bg-gradient-to-r from-[#07132c] via-[#0d2147] to-[#0a2d42] text-white px-4 py-3.5 border-b border-cyan-400/20 flex items-center justify-between gap-3 shrink-0">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shrink-0">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-500 to-teal-600 flex items-center justify-center shrink-0 shadow-xs">
                 <Bot className="w-5 h-5 text-white" />
               </div>
               <div className="min-w-0">
@@ -342,14 +343,14 @@ export function ShehreenAssistant({
           </div>
 
           {/* Starter Prompt Chips */}
-          <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto shrink-0">
+          <div className="px-3 py-2 bg-slate-50/90 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto shrink-0">
             {STARTER_PROMPTS.map((item) => (
               <button
                 key={item.label}
                 type="button"
                 disabled={sending}
                 onClick={() => void sendMessage(item.prompt)}
-                className="px-2.5 py-1 rounded-lg bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 text-[11px] font-medium text-slate-700 hover:text-blue-800 whitespace-nowrap transition-colors cursor-pointer disabled:opacity-50"
+                className="px-2.5 py-1 rounded-lg bg-white hover:bg-cyan-50 border border-slate-200 hover:border-cyan-300 text-[11px] font-medium text-slate-700 hover:text-cyan-900 whitespace-nowrap transition-colors cursor-pointer disabled:opacity-50"
               >
                 {item.label}
               </button>
@@ -371,7 +372,7 @@ export function ShehreenAssistant({
                   <div
                     className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed ${
                       isUser
-                        ? 'bg-blue-700 text-white rounded-br-sm'
+                        ? 'bg-gradient-to-r from-[#0a1633] to-cyan-700 text-white rounded-br-sm'
                         : msg.isError
                           ? 'bg-red-50 text-red-800 border border-red-200 rounded-bl-sm'
                           : 'bg-white text-slate-800 border border-slate-200 shadow-sm rounded-bl-sm'
@@ -386,7 +387,7 @@ export function ShehreenAssistant({
                         <button
                           type="button"
                           onClick={() => onApplyAction(msg.action!)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-blue-700 text-white text-[11px] font-semibold transition-colors cursor-pointer shadow-sm"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-[#0a1633] to-cyan-700 hover:brightness-110 text-white text-[11px] font-semibold transition-all cursor-pointer shadow-sm"
                         >
                           <span>{msg.action.actionLabel || 'Open Matching Page & Filter'}</span>
                           <ArrowRight className="w-3.5 h-3.5" />
@@ -458,13 +459,13 @@ export function ShehreenAssistant({
               }}
               placeholder="Ask anything — email draft, Excel formula, PG/FO, or chat with Shehreen..."
               disabled={sending}
-              className="flex-1 px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-blue-500 focus:outline-none text-xs text-slate-900 resize-none leading-snug"
+              className="flex-1 px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-cyan-600 focus:outline-none text-xs text-slate-900 resize-none leading-snug"
             />
             <button
               type="submit"
               disabled={sending || !input.trim()}
               aria-label="Send message to Shehreen"
-              className="h-10 px-3.5 rounded-xl bg-blue-700 hover:bg-blue-800 disabled:opacity-40 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+              className="h-10 px-3.5 rounded-xl bg-gradient-to-r from-[#0a1633] to-cyan-700 hover:brightness-110 disabled:opacity-40 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
             >
               <Send className="w-3.5 h-3.5" />
               <span>Send</span>

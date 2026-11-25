@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   ALLOWED_FACTORIES,
+  evaluatePlanningRecords,
   parseMasterPlanCsv,
 } from '../shared/plannerTypes.ts';
 import type {
@@ -12,6 +13,8 @@ import type {
   MasterPlanMeta,
   OrderStatus,
   PlanningRecord,
+  PublicMasterPlanRecord,
+  PublicMasterPlanResponse,
 } from '../shared/plannerTypes.ts';
 import { DEFAULT_REMINDER_SCHEDULE } from '../shared/reminderTypes.ts';
 import type {
@@ -311,6 +314,80 @@ export function getPublicWorkspaceState(isAdmin = false) {
       logs: [],
     },
     needsInitialSetup,
+  };
+}
+
+export function getPublicMasterPlanState(factoryFilter?: FactoryName): PublicMasterPlanResponse {
+  const state = getWorkspaceState();
+  const evaluated = evaluatePlanningRecords(
+    state.records,
+    state.cuttingEntries,
+    state.referenceDateIso,
+    {
+      inputStartOffsetDays: state.siteConfig.inputStartOffsetDays,
+      upcomingFoOffsetDays: state.siteConfig.upcomingFoOffsetDays,
+      cuttingAlertDays: state.siteConfig.cuttingAlertDays,
+    }
+  );
+
+  const scopedEvaluated = factoryFilter
+    ? evaluated.filter((rec) => rec.factory === factoryFilter)
+    : evaluated;
+
+  const lineCapacityMap = new Map<string, number>();
+  for (const rec of scopedEvaluated) {
+    const lineKey = `${rec.factory}::${rec.line}`;
+    if (!lineCapacityMap.has(lineKey)) {
+      lineCapacityMap.set(lineKey, rec.capacityMc || 0);
+    }
+  }
+  const scopedTotalLines = factoryFilter ? lineCapacityMap.size : state.meta.totalLines;
+  const scopedTotalCapacityMc = factoryFilter
+    ? Array.from(lineCapacityMap.values()).reduce((sum, cap) => sum + cap, 0)
+    : state.meta.totalCapacityMc;
+
+  const sanitizedRecords: PublicMasterPlanRecord[] = scopedEvaluated.map((rec) => ({
+    id: rec.id,
+    factory: rec.factory,
+    zone: rec.zone,
+    line: rec.line,
+    capacityMc: rec.capacityMc,
+    productCategory: rec.productCategory,
+    slot: rec.slot,
+    orderStatus: rec.orderStatus,
+    pgNumber: rec.pgNumber,
+    style: rec.style,
+    nextStyle: rec.nextStyle,
+    styleClassification: rec.styleClassification,
+    styleQtyHint: rec.styleQtyHint,
+    plannedQty: rec.plannedQty,
+    endDateIso: rec.endDateIso,
+    triggerDateIso: rec.triggerDateIso,
+    newStyleOutputStartIso: rec.newStyleOutputStartIso,
+    estimatedCuttingFinishIso: rec.estimatedCuttingFinishIso,
+    lifecycleStage: rec.lifecycleStage,
+    actionMessage: rec.actionMessage,
+    riskStatus: rec.riskStatus,
+    riskTier: rec.riskTier,
+  }));
+
+  return {
+    meta: {
+      title: state.meta.title,
+      asOfDateRaw: state.meta.asOfDateRaw,
+      asOfDateIso: state.meta.asOfDateIso,
+      factoriesIncluded: [...state.meta.factoriesIncluded],
+      totalLines: scopedTotalLines,
+      totalCapacityMc: scopedTotalCapacityMc,
+    },
+    selectedFactory: factoryFilter ?? null,
+    records: sanitizedRecords,
+    referenceDateIso: state.referenceDateIso,
+    updatedAtIso: state.updatedAtIso,
+    branding: {
+      companyName: state.siteConfig.companyName,
+      portalTitle: state.siteConfig.portalTitle,
+    },
   };
 }
 

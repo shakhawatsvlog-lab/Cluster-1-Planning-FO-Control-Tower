@@ -10,7 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { ALLOWED_FACTORIES, formatDisplayDate } from '../shared/plannerTypes.ts';
-import type { EvaluatedPlanningRecord, FactoryName } from '../shared/plannerTypes.ts';
+import type { FactoryName } from '../shared/plannerTypes.ts';
 
 export type StageFilter = 'ALL' | 'CURRENT_ONLY' | 'QUEUED_ONLY';
 
@@ -26,6 +26,13 @@ export interface DateRangeFilterValue {
   toIso: string;
 }
 
+export interface DateFilterableRecord {
+  endDateIso: string | null;
+  triggerDateIso: string | null;
+  newStyleOutputStartIso: string | null;
+  estimatedCuttingFinishIso: string | null;
+}
+
 export const DATE_RANGE_FIELD_OPTIONS: Array<{
   value: DateRangeField;
   label: string;
@@ -37,7 +44,7 @@ export const DATE_RANGE_FIELD_OPTIONS: Array<{
 ];
 
 export function getRecordDateForRangeFilter(
-  rec: EvaluatedPlanningRecord,
+  rec: DateFilterableRecord,
   field: DateRangeField
 ): string | null {
   switch (field) {
@@ -54,7 +61,7 @@ export function getRecordDateForRangeFilter(
 }
 
 export function isRecordInDateRange(
-  rec: EvaluatedPlanningRecord,
+  rec: DateFilterableRecord,
   dateRange: DateRangeFilterValue
 ): boolean {
   const { field, fromIso, toIso } = dateRange;
@@ -79,15 +86,16 @@ interface FilterToolbarProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   referenceDateIso: string;
-  onReferenceDateChange: (iso: string) => void;
+  onReferenceDateChange?: (iso: string) => void;
   dateRangeFilter: DateRangeFilterValue;
   onApplyDateRange: (next: DateRangeFilterValue) => void;
   onClearDateRange: () => void;
   matchedRecordCount: number;
   totalRecordCount: number;
-  onUploadPlanFile: (file: File) => void;
-  hasCustomEdits: boolean;
-  onResetEdits: () => void;
+  onUploadPlanFile?: (file: File) => void;
+  hasCustomEdits?: boolean;
+  onResetEdits?: () => void;
+  readOnlyPublic?: boolean;
 }
 
 export function FilterToolbar({
@@ -110,8 +118,9 @@ export function FilterToolbar({
   matchedRecordCount,
   totalRecordCount,
   onUploadPlanFile,
-  hasCustomEdits,
+  hasCustomEdits = false,
   onResetEdits,
+  readOnlyPublic = false,
 }: FilterToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -128,7 +137,7 @@ export function FilterToolbar({
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !onUploadPlanFile) return;
     onUploadPlanFile(file);
     e.target.value = '';
   };
@@ -172,12 +181,12 @@ export function FilterToolbar({
     : null;
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+    <div className="ct-surface rounded-2xl overflow-hidden">
       {/* Compact Collapsible Filter Header */}
-      <div className="px-3.5 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2.5 bg-slate-50/70">
+      <div className="px-3.5 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2.5 bg-slate-50/75">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800">
-            <SlidersHorizontal className="w-3.5 h-3.5 text-blue-700 shrink-0" />
+            <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-700 shrink-0" />
             <span>Planning Filters</span>
           </span>
 
@@ -193,7 +202,7 @@ export function FilterToolbar({
               {selectedLine === 'ALL' ? `All Lines (${availableLines.length})` : selectedLine}
             </span>
             {stageFilter !== 'ALL' && (
-              <span className="px-2 py-0.5 rounded bg-blue-50 border border-blue-200 font-medium text-blue-800">
+              <span className="px-2 py-0.5 rounded bg-cyan-50 border border-cyan-200 font-medium text-cyan-900">
                 {stageFilter === 'CURRENT_ONLY' ? 'Current Style (Slot 1)' : 'Queued Only'}
               </span>
             )}
@@ -201,7 +210,7 @@ export function FilterToolbar({
               Ref: {formatDisplayDate(referenceDateIso)}
             </span>
             {dateRangeActive && activeRangeText && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 font-medium text-indigo-800">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-teal-50 border border-teal-200 font-medium text-teal-900">
                 <CalendarRange className="w-3 h-3 shrink-0" />
                 <span>
                   {activeFieldLabel}: {activeRangeText}
@@ -222,11 +231,11 @@ export function FilterToolbar({
           aria-expanded={isExpanded}
           aria-controls="planning-filter-panel-body"
           title={isExpanded ? 'Collapse filter options' : 'Expand filter options'}
-          className="h-8 px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+          className="h-8 px-2.5 rounded-lg border border-slate-300 bg-white hover:border-cyan-500/50 hover:bg-cyan-50/40 text-slate-700 hover:text-slate-900 text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
         >
           <span>{isExpanded ? 'Hide Filters' : 'Filters'}</span>
           <ChevronDown
-            className={`w-4 h-4 transition-transform duration-300 ${
+            className={`w-4 h-4 text-cyan-700 transition-transform duration-300 ${
               isExpanded ? 'rotate-180' : 'rotate-0'
             }`}
           />
@@ -239,7 +248,7 @@ export function FilterToolbar({
           className={`px-3.5 sm:px-4 py-2 border-t text-xs flex flex-wrap items-center justify-between gap-2 ${
             matchedRecordCount === 0
               ? 'bg-amber-50 border-amber-200 text-amber-900'
-              : 'bg-indigo-50/60 border-indigo-100 text-indigo-900'
+              : 'bg-cyan-50/70 border-cyan-100 text-cyan-950'
           }`}
         >
           <div className="flex items-center gap-2 font-medium">
@@ -253,7 +262,7 @@ export function FilterToolbar({
               </>
             ) : (
               <>
-                <CalendarRange className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+                <CalendarRange className="w-3.5 h-3.5 text-cyan-700 shrink-0" />
                 <span>
                   Showing <span className="font-mono font-bold">{matchedRecordCount}</span> of{' '}
                   <span className="font-mono">{totalRecordCount}</span> planning slots matching{' '}
@@ -295,7 +304,7 @@ export function FilterToolbar({
                   id="factory-filter"
                   value={selectedFactory}
                   onChange={(e) => onFactoryChange(e.target.value as FactoryName | 'ALL')}
-                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                 >
                   <option value="ALL">All Factories (4)</option>
                   {ALLOWED_FACTORIES.map((f) => (
@@ -315,7 +324,7 @@ export function FilterToolbar({
                   id="line-filter"
                   value={selectedLine}
                   onChange={(e) => onLineChange(e.target.value)}
-                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                 >
                   <option value="ALL">All Lines ({availableLines.length})</option>
                   {availableLines.map((line) => (
@@ -355,26 +364,28 @@ export function FilterToolbar({
                 </div>
               </div>
 
-              {/* Reference Date */}
-              <div className="flex flex-col gap-1">
-                <label htmlFor="ref-date" className="text-xs font-medium text-slate-600">
-                  Trigger Ref Date
-                </label>
-                <input
-                  id="ref-date"
-                  type="date"
-                  value={referenceDateIso}
-                  onChange={(e) => {
-                    if (e.target.value) onReferenceDateChange(e.target.value);
-                  }}
-                  className="h-10 px-3 rounded-lg border border-slate-300 bg-white font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
-                />
-              </div>
+              {/* Reference Date (Admin Control Tower only) */}
+              {!readOnlyPublic && onReferenceDateChange && (
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="ref-date" className="text-xs font-medium text-slate-600">
+                    Trigger Ref Date
+                  </label>
+                  <input
+                    id="ref-date"
+                    type="date"
+                    value={referenceDateIso}
+                    onChange={(e) => {
+                      if (e.target.value) onReferenceDateChange(e.target.value);
+                    }}
+                    className="h-10 px-3 rounded-lg border border-slate-300 bg-white font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
+                  />
+                </div>
+              )}
 
               {/* Search Input */}
               <div className="flex flex-col gap-1 sm:col-span-2 lg:flex-1 lg:min-w-[200px]">
                 <label htmlFor="plan-search" className="text-xs font-medium text-slate-600">
-                  Search Style / PG# / FO
+                  {readOnlyPublic ? 'Search Style / PG#' : 'Search Style / PG# / FO'}
                 </label>
                 <div className="relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -383,40 +394,46 @@ export function FilterToolbar({
                     type="text"
                     value={searchQuery}
                     onChange={(e) => onSearchChange(e.target.value)}
-                    placeholder="Filter PG#, style, line, or FO#..."
-                    className="w-full h-10 pl-9 pr-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    placeholder={
+                      readOnlyPublic
+                        ? 'Filter PG#, style, or line...'
+                        : 'Filter PG#, style, line, or FO#...'
+                    }
+                    className="w-full h-10 pl-9 pr-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                   />
                 </div>
               </div>
 
-              {/* Upload CSV / XLSX & Reset */}
-              <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-1">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Upload Plan (.csv/.xlsx)</span>
-                </button>
-                {hasCustomEdits && (
+              {/* Upload CSV / XLSX & Reset (Admin Control Tower only) */}
+              {!readOnlyPublic && onUploadPlanFile && (
+                <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-1">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
                   <button
                     type="button"
-                    onClick={onResetEdits}
+                    onClick={() => fileInputRef.current?.click()}
                     className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Reset Plan</span>
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Upload Plan (.csv/.xlsx)</span>
                   </button>
-                )}
-              </div>
+                  {hasCustomEdits && onResetEdits && (
+                    <button
+                      type="button"
+                      onClick={onResetEdits}
+                      className="h-10 px-3.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset Plan</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* New Date Range Filter Section */}
@@ -438,7 +455,7 @@ export function FilterToolbar({
                       setDraftField(e.target.value as DateRangeField);
                       setDateValidationError(null);
                     }}
-                    className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                   >
                     {DATE_RANGE_FIELD_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -461,7 +478,7 @@ export function FilterToolbar({
                       setDraftFromIso(e.target.value);
                       setDateValidationError(null);
                     }}
-                    className="h-10 px-3 rounded-lg border border-slate-300 bg-white font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    className="h-10 px-3 rounded-lg border border-slate-300 bg-white font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                   />
                 </div>
 
@@ -478,7 +495,7 @@ export function FilterToolbar({
                       setDraftToIso(e.target.value);
                       setDateValidationError(null);
                     }}
-                    className="h-10 px-3 rounded-lg border border-slate-300 bg-white font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    className="h-10 px-3 rounded-lg border border-slate-300 bg-white font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                   />
                 </div>
 
@@ -487,7 +504,7 @@ export function FilterToolbar({
                   <button
                     type="button"
                     onClick={handleApplyDateFilter}
-                    className="h-10 px-4 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    className="h-10 px-4 rounded-lg bg-gradient-to-r from-cyan-700 to-teal-700 hover:from-cyan-800 hover:to-teal-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs transition-all whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <CalendarRange className="w-3.5 h-3.5" />
                     <span>Apply Filter</span>

@@ -45,8 +45,8 @@ export function FabricOrderTrackerView({
   ).length;
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-      <div className="px-4 sm:px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-white">
+    <div className="ct-surface rounded-2xl overflow-hidden">
+      <div className="px-4 sm:px-5 py-3.5 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3 bg-white/85">
         <div>
           <h2 className="font-display text-sm font-semibold text-slate-900">
             Fabric Order Tracker ({records.length} Line-Wise Allocations)
@@ -66,7 +66,7 @@ export function FabricOrderTrackerView({
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
+            <tr className="border-b border-slate-200 bg-slate-50/90 text-xs font-medium text-slate-500">
               <th className="py-2.5 px-3 whitespace-nowrap">Factory · Line</th>
               <th className="py-2.5 px-3 whitespace-nowrap">Stage · PG #</th>
               <th className="py-2.5 px-3 whitespace-nowrap">Style</th>
@@ -100,7 +100,7 @@ export function FabricOrderTrackerView({
                   <tr
                     key={rec.id}
                     className={`transition-colors ${
-                      isClosed ? 'bg-slate-50/80 opacity-75' : 'hover:bg-slate-50/80'
+                      isClosed ? 'bg-slate-50/80 opacity-75' : 'hover:bg-cyan-50/35'
                     }`}
                   >
                     <td className="py-2.5 px-3 whitespace-nowrap">
@@ -152,7 +152,7 @@ export function FabricOrderTrackerView({
                           })
                         }
                         aria-label={`Order status for ${rec.line} ${rec.style}`}
-                        className={`h-8 px-2 text-xs font-medium rounded border focus:outline-none focus:ring-2 focus:ring-blue-600 cursor-pointer ${
+                        className={`h-8 px-2 text-xs font-medium rounded border focus:outline-none focus:ring-2 focus:ring-cyan-600 cursor-pointer ${
                           isClosed
                             ? 'bg-slate-100 border-slate-300 text-slate-700'
                             : 'bg-white border-slate-300 text-slate-900'
@@ -178,7 +178,7 @@ export function FabricOrderTrackerView({
                           });
                         }}
                         aria-label={`Order qty for ${rec.line} ${rec.style}`}
-                        className={`w-22 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border focus:outline-none focus:ring-2 focus:ring-blue-600 ${
+                        className={`w-22 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border focus:outline-none focus:ring-2 focus:ring-cyan-600 ${
                           rec.plannedQty === null && !isClosed
                             ? 'bg-amber-50/70 border-amber-300 placeholder:text-amber-700/70'
                             : 'bg-white border-slate-300 text-slate-900'
@@ -198,7 +198,7 @@ export function FabricOrderTrackerView({
                           });
                         }}
                         aria-label={`FO issue qty for ${rec.line} ${rec.style}`}
-                        className="w-22 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        className="w-22 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                       />
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-teal-700 whitespace-nowrap">
@@ -217,7 +217,7 @@ export function FabricOrderTrackerView({
                           });
                         }}
                         aria-label={`Daily target qty for ${rec.line} ${rec.style}`}
-                        className="w-20 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        className="w-20 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                       />
                     </td>
                     <td
@@ -241,7 +241,7 @@ export function FabricOrderTrackerView({
                           })
                         }
                         aria-label={`End date for ${rec.line} ${rec.style}`}
-                        className="h-8 px-2 font-mono text-xs rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        className="h-8 px-2 font-mono text-xs rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                       />
                     </td>
                     <td className="py-2.5 px-3 font-mono tabular-nums font-medium whitespace-nowrap text-slate-900">
@@ -256,7 +256,7 @@ export function FabricOrderTrackerView({
                           onUpdateRecord(rec.id, { foNumber: e.target.value })
                         }
                         aria-label={`FO number for ${rec.line} ${rec.style}`}
-                        className="w-22 h-8 px-2 font-mono text-xs rounded border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        className="w-22 h-8 px-2 font-mono text-xs rounded border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                       />
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
@@ -266,7 +266,7 @@ export function FabricOrderTrackerView({
                           onUpdateRecord(rec.id, { foStatus: e.target.value as FoStatus })
                         }
                         aria-label={`FO status for ${rec.line} ${rec.style}`}
-                        className="h-8 px-2 text-xs font-medium rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        className="h-8 px-2 text-xs font-medium rounded border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                       >
                         {FO_STATUS_OPTIONS.map((opt) => (
                           <option key={opt} value={opt}>

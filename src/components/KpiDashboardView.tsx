@@ -41,6 +41,7 @@ import type { NavTab } from './Sidebar.tsx';
 import { isRecordInDateRange } from './FilterToolbar.tsx';
 import type { DateRangeFilterValue } from './FilterToolbar.tsx';
 import { apiUrl } from '../lib/apiBase.ts';
+import { buildAdminHeaders } from '../lib/adminSession.ts';
 
 type DashboardTabMode = 'recent_fo' | 'set_running' | 'all_running';
 type PgFoFilterMode = 'recent' | 'all' | 'released';
@@ -539,7 +540,7 @@ export function KpiDashboardView({
       const response = await fetch(apiUrl('/api/export-selected-fo-summary-xlsx'), {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildAdminHeaders(true),
         body: JSON.stringify({
           masterPlanAsOf,
           referenceDateIso,
@@ -744,10 +745,10 @@ export function KpiDashboardView({
   return (
     <div className="space-y-6">
       {/* Control Tower Executive Summary Banner */}
-      <section className="bg-slate-900 border border-slate-800 rounded-xl p-5 sm:p-6 text-white space-y-4 shadow-xs">
+      <section className="ct-exec-banner rounded-2xl p-5 sm:p-6 text-white space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div className="space-y-1.5 min-w-0">
-            <div className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-blue-300">
+            <div className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-cyan-300">
               <CalendarClock className="w-3.5 h-3.5 shrink-0" />
               <span>Daily PG-Wise FO &amp; Output Start Summary · {formatDisplayDate(referenceDateIso)}</span>
             </div>
@@ -760,9 +761,9 @@ export function KpiDashboardView({
           </div>
 
           <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch gap-2.5 sm:gap-3 shrink-0">
-            <div className="rounded-xl bg-slate-800/80 border border-slate-700 px-3.5 py-2.5 text-center sm:min-w-[140px]">
+            <div className="rounded-xl bg-white/5 border border-cyan-400/20 backdrop-blur-xs px-3.5 py-2.5 text-center sm:min-w-[140px]">
               <div className="text-[11px] text-slate-300">PG Issue Qty (= Order)</div>
-              <div className="font-mono text-lg sm:text-xl font-bold text-blue-300 tabular-nums">
+              <div className="font-mono text-lg sm:text-xl font-bold text-cyan-300 tabular-nums">
                 {scopedPgSummary.totalPgIssueQty.toLocaleString()}
               </div>
               <div className="text-[10px] text-slate-300 font-mono">
@@ -770,7 +771,7 @@ export function KpiDashboardView({
               </div>
             </div>
 
-            <div className="rounded-xl bg-slate-800/80 border border-slate-700 px-3.5 py-2.5 text-center sm:min-w-[120px]">
+            <div className="rounded-xl bg-white/5 border border-cyan-400/20 backdrop-blur-xs px-3.5 py-2.5 text-center sm:min-w-[120px]">
               <div className="text-[11px] text-slate-300">Recent FO Needed</div>
               <div className="font-mono text-lg sm:text-xl font-bold text-amber-300 tabular-nums">
                 {totalRecentFoPgCount}
@@ -780,7 +781,7 @@ export function KpiDashboardView({
               </div>
             </div>
 
-            <div className="rounded-xl bg-slate-800/80 border border-slate-700 px-3.5 py-2.5 text-center sm:min-w-[105px]">
+            <div className="rounded-xl bg-white/5 border border-cyan-400/20 backdrop-blur-xs px-3.5 py-2.5 text-center sm:min-w-[105px]">
               <div className="text-[11px] text-slate-300">Running Set</div>
               <div className="font-mono text-lg sm:text-xl font-bold text-emerald-300 tabular-nums">
                 {totalRunningSet}
@@ -791,14 +792,14 @@ export function KpiDashboardView({
             <button
               type="button"
               onClick={scrollToSavedBox}
-              className="rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/40 px-3.5 py-2.5 text-center sm:min-w-[105px] transition-colors cursor-pointer"
+              className="rounded-xl bg-teal-500/15 hover:bg-teal-500/25 border border-teal-400/40 px-3.5 py-2.5 text-center sm:min-w-[105px] transition-colors cursor-pointer"
               title="Jump to Saved Upcoming FO Checklist Box below"
             >
-              <div className="text-[11px] text-emerald-200 inline-flex items-center justify-center gap-1">
+              <div className="text-[11px] text-teal-200 inline-flex items-center justify-center gap-1">
                 <span>Saved Box</span>
                 <ArrowDown className="w-3 h-3" />
               </div>
-              <div className="font-mono text-lg sm:text-xl font-bold text-emerald-300 tabular-nums">
+              <div className="font-mono text-lg sm:text-xl font-bold text-teal-300 tabular-nums">
                 {allSavedRecords.length}
               </div>
             </button>
@@ -806,7 +807,7 @@ export function KpiDashboardView({
             <button
               type="button"
               onClick={() => setTabMode(tabMode === 'set_running' ? 'recent_fo' : 'set_running')}
-              className="col-span-2 sm:col-span-1 h-11 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
+              className="col-span-2 sm:col-span-1 h-11 px-4 rounded-lg bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 shadow-[0_6px_18px_-6px_rgba(6,182,212,0.5)] transition-all cursor-pointer whitespace-nowrap"
             >
               <SlidersHorizontal className="w-4 h-4" />
               <span>
@@ -822,14 +823,14 @@ export function KpiDashboardView({
         {onUpdatePlanningRules && (
           <form
             onSubmit={handleApplyRuleOffsets}
-            className="pt-3 border-t border-white/15 flex flex-wrap items-center justify-between gap-3 text-xs"
+            className="pt-3 border-t border-cyan-400/20 flex flex-wrap items-center justify-between gap-3 text-xs"
           >
             <div className="flex flex-wrap items-center gap-3">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-blue-200">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-cyan-200">
                 Editable FO Rule:
               </span>
 
-              <label className="inline-flex items-center gap-1.5 bg-white/10 border border-white/15 rounded-lg px-2.5 py-1">
+              <label className="inline-flex items-center gap-1.5 bg-white/10 border border-cyan-400/20 rounded-lg px-2.5 py-1">
                 <span className="text-slate-200">FO Needed Before Input Start:</span>
                 <input
                   type="number"
@@ -842,12 +843,12 @@ export function KpiDashboardView({
                   }}
                   disabled={isEditingLocked || savingRules}
                   aria-label="FO Needed Before Input Start Days"
-                  className="w-14 h-7 px-1.5 rounded bg-slate-950/70 border border-white/25 text-white font-mono text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+                  className="w-14 h-7 px-1.5 rounded bg-slate-950/70 border border-cyan-400/30 text-white font-mono text-xs text-center focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50"
                 />
                 <span className="text-slate-300 font-mono">days</span>
               </label>
 
-              <label className="inline-flex items-center gap-1.5 bg-white/10 border border-white/15 rounded-lg px-2.5 py-1">
+              <label className="inline-flex items-center gap-1.5 bg-white/10 border border-cyan-400/20 rounded-lg px-2.5 py-1">
                 <span className="text-slate-200">New Style Input Before End:</span>
                 <input
                   type="number"
@@ -860,7 +861,7 @@ export function KpiDashboardView({
                   }}
                   disabled={isEditingLocked || savingRules}
                   aria-label="New Style Input Before Running End Days"
-                  className="w-14 h-7 px-1.5 rounded bg-slate-950/70 border border-white/25 text-white font-mono text-xs text-center focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+                  className="w-14 h-7 px-1.5 rounded bg-slate-950/70 border border-cyan-400/30 text-white font-mono text-xs text-center focus:outline-none focus:ring-2 focus:ring-cyan-400 disabled:opacity-50"
                 />
                 <span className="text-slate-300 font-mono">days</span>
               </label>
@@ -868,7 +869,7 @@ export function KpiDashboardView({
               <button
                 type="submit"
                 disabled={isEditingLocked || savingRules || !rulesDirty}
-                className="h-8 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white text-xs font-semibold transition-colors cursor-pointer"
+                className="h-8 px-3 rounded-lg bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-45 text-white text-xs font-semibold transition-all cursor-pointer"
               >
                 {savingRules ? 'Saving...' : 'Apply Rule'}
               </button>
@@ -903,15 +904,15 @@ export function KpiDashboardView({
                 key={card.factory}
                 type="button"
                 onClick={() => onSelectFactory(isSelected ? 'ALL' : card.factory)}
-                className={`text-left bg-white border rounded-xl p-4 transition-colors cursor-pointer ${
+                className={`text-left ct-surface rounded-2xl p-4 transition-all cursor-pointer ${
                   isSelected
-                    ? 'border-blue-600 ring-2 ring-blue-600/20 bg-blue-50/25'
-                    : 'border-slate-200 hover:border-slate-300'
+                    ? '!border-cyan-500 ring-2 ring-cyan-500/25 !bg-cyan-50/35'
+                    : 'hover:border-cyan-400/50 hover:-translate-y-0.5'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="inline-flex items-center gap-2">
-                    <span className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center shrink-0">
+                    <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0a1633] to-cyan-700 text-white flex items-center justify-center shrink-0 shadow-xs">
                       <Factory className="w-4 h-4" />
                     </span>
                     <div>
@@ -924,7 +925,7 @@ export function KpiDashboardView({
                     </div>
                   </div>
                   {isSelected && (
-                    <span className="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-md">
+                    <span className="text-[11px] font-semibold text-cyan-800 bg-cyan-100 px-2 py-0.5 rounded-md">
                       Active
                     </span>
                   )}
@@ -1021,8 +1022,8 @@ export function KpiDashboardView({
       </section>
 
       {/* Main Focused Table Card */}
-      <section className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-        <div className="px-4 sm:px-5 py-4 border-b border-slate-200 bg-white flex flex-wrap items-center justify-between gap-3">
+      <section className="ct-surface rounded-2xl overflow-hidden">
+        <div className="px-4 sm:px-5 py-4 border-b border-slate-200/80 bg-white/85 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="font-display text-sm sm:text-base font-bold text-slate-900">
               {tabMode === 'recent_fo' &&
@@ -1054,11 +1055,11 @@ export function KpiDashboardView({
                     key={f.id}
                     type="button"
                     onClick={() => setPgFilterMode(f.id)}
-                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-all cursor-pointer whitespace-nowrap ${
                       pgFilterMode === f.id
                         ? f.id === 'released'
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-blue-700 text-white'
+                          ? 'bg-teal-700 text-white'
+                          : 'bg-gradient-to-r from-[#0a1633] to-cyan-700 text-white'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
@@ -1075,7 +1076,7 @@ export function KpiDashboardView({
                   onClick={() => setHideSavedInTopTable((prev) => !prev)}
                   className={`h-8 px-3 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
                     !hideSavedInTopTable
-                      ? 'bg-blue-50 border-blue-300 text-blue-800'
+                      ? 'bg-cyan-50 border-cyan-300 text-cyan-900'
                       : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                   }`}
                   title="Toggle showing items already ticked & moved to the bottom box"
@@ -1095,7 +1096,7 @@ export function KpiDashboardView({
                 <button
                   type="button"
                   onClick={scrollToSavedBox}
-                  className="h-8 px-3 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                  className="h-8 px-3 rounded-lg border border-teal-300 bg-teal-50 hover:bg-teal-100 text-teal-900 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <BookmarkCheck className="w-3.5 h-3.5" />
                   <span>Saved Box ({savedBoxRows.length})</span>
@@ -1109,7 +1110,7 @@ export function KpiDashboardView({
                 type="button"
                 onClick={handleExportSavedExcel}
                 disabled={exportingSelected}
-                className="h-8 px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap"
+                className="h-8 px-3 rounded-lg bg-gradient-to-r from-teal-700 to-emerald-700 hover:from-teal-800 hover:to-emerald-600 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs transition-all cursor-pointer whitespace-nowrap"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>
@@ -1138,7 +1139,7 @@ export function KpiDashboardView({
                   onClick={() => setTabMode(tab.id)}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
                     tabMode === tab.id
-                      ? 'bg-slate-900 text-white shadow-xs'
+                      ? 'bg-gradient-to-r from-[#0a1633] to-cyan-700 text-white shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -1222,9 +1223,9 @@ export function KpiDashboardView({
                             }
                           }}
                           aria-label={`Select running style for ${s.factory} ${s.line}`}
-                          className={`w-full max-w-md h-9 px-2.5 rounded-lg border text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-600 cursor-pointer ${
+                          className={`w-full max-w-md h-9 px-2.5 rounded-lg border text-xs font-medium focus:outline-none focus:ring-2 focus:ring-cyan-600 cursor-pointer ${
                             currentRunId
-                              ? 'bg-blue-50/50 border-blue-300 text-slate-900'
+                              ? 'bg-cyan-50/50 border-cyan-300 text-slate-900'
                               : 'bg-amber-50/40 border-amber-300 text-slate-700'
                           }`}
                         >
@@ -1366,7 +1367,7 @@ export function KpiDashboardView({
                         <button
                           type="button"
                           onClick={() => setTabMode('set_running')}
-                          className="px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                          className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-700 to-teal-700 hover:from-cyan-800 hover:to-teal-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
                         >
                           <SlidersHorizontal className="w-3.5 h-3.5" />
                           <span>Set Running Styles Now</span>
@@ -1802,11 +1803,11 @@ export function KpiDashboardView({
       <section
         id="saved-upcoming-fo-box"
         aria-label="Saved Upcoming FO Shortlist Box"
-        className="bg-white border border-emerald-300 rounded-xl overflow-hidden shadow-xs"
+        className="ct-surface !border-teal-300/80 rounded-2xl overflow-hidden"
       >
-        <div className="px-4 sm:px-5 py-4 border-b border-emerald-200 bg-emerald-50/60 flex flex-wrap items-center justify-between gap-3">
+        <div className="px-4 sm:px-5 py-4 border-b border-teal-200/80 bg-teal-50/55 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-start gap-2.5">
-            <span className="w-8 h-8 rounded-lg bg-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5">
+            <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-teal-700 to-emerald-700 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
               <BookmarkCheck className="w-4 h-4" />
             </span>
             <div>
@@ -1816,12 +1817,12 @@ export function KpiDashboardView({
                   {savedBoxRows.length === 1 ? 'Item' : 'Items'})
                 </h3>
                 {allSavedRecords.length !== savedBoxRows.length && (
-                  <span className="text-[11px] font-medium text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
+                  <span className="text-[11px] font-medium text-teal-900 bg-teal-100 px-2 py-0.5 rounded-md">
                     {allSavedRecords.length} total across all factories
                   </span>
                 )}
                 {savedBoxRows.length > 0 && (
-                  <span className="font-mono text-[11px] font-semibold text-slate-700 bg-white border border-emerald-200 px-2.5 py-0.5 rounded-md tabular-nums">
+                  <span className="font-mono text-[11px] font-semibold text-slate-700 bg-white border border-teal-200 px-2.5 py-0.5 rounded-md tabular-nums">
                     Order: {savedTotalOrderQty.toLocaleString()} · Issue: {savedTotalIssueQty.toLocaleString()} pcs
                   </span>
                 )}
@@ -1853,10 +1854,10 @@ export function KpiDashboardView({
               type="button"
               onClick={() => setShowEmailComposer((prev) => !prev)}
               disabled={savedBoxRows.length === 0}
-              className={`h-9 px-4 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer whitespace-nowrap disabled:opacity-45 ${
+              className={`h-9 px-4 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap disabled:opacity-45 ${
                 showEmailComposer
                   ? 'bg-slate-900 hover:bg-slate-800 text-white'
-                  : 'bg-blue-700 hover:bg-blue-800 text-white'
+                  : 'bg-gradient-to-r from-[#0a1633] to-cyan-700 hover:brightness-110 text-white'
               }`}
             >
               <Mail className="w-4 h-4" />
@@ -1867,7 +1868,7 @@ export function KpiDashboardView({
               type="button"
               onClick={handleExportSavedExcel}
               disabled={savedBoxRows.length === 0 || exportingSelected}
-              className="h-9 px-4 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-45 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer whitespace-nowrap"
+              className="h-9 px-4 rounded-lg bg-gradient-to-r from-teal-700 to-emerald-700 hover:from-teal-800 hover:to-emerald-600 disabled:opacity-45 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap"
             >
               <Download className="w-4 h-4" />
               <span>
@@ -1939,7 +1940,7 @@ export function KpiDashboardView({
                   value={emailToInput}
                   onChange={(e) => setEmailToInput(e.target.value)}
                   placeholder="fabric@alexapparels.com, merch@alexapparels.com"
-                  className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                 />
                 {reminderRecipients.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5 pt-1">
@@ -1998,7 +1999,7 @@ export function KpiDashboardView({
                     setEmailSubjectEdited(true);
                     setEmailSubjectInput(e.target.value);
                   }}
-                  className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                 />
               </div>
             </div>
@@ -2024,7 +2025,7 @@ export function KpiDashboardView({
                 rows={7}
                 value={emailBodyInput}
                 onChange={(e) => setEmailBodyInput(e.target.value)}
-                className="w-full p-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-600"
+                className="w-full p-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900 leading-relaxed focus:outline-none focus:ring-2 focus:ring-cyan-600"
               />
             </div>
 
@@ -2056,7 +2057,7 @@ export function KpiDashboardView({
                 <button
                   type="submit"
                   disabled={sendingSavedEmail || !emailToInput.trim()}
-                  className="h-9 px-4 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm cursor-pointer"
+                  className="h-9 px-4 rounded-lg bg-gradient-to-r from-[#0a1633] to-cyan-700 hover:brightness-110 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm cursor-pointer transition-all"
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span>

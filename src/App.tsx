@@ -65,9 +65,22 @@ import {
 } from './components/AppLinkModal.tsx';
 import { OfflineIndicator } from './components/PWAInstallButton.tsx';
 import { apiUrl } from './lib/apiBase.ts';
+import {
+  readStoredAdminToken,
+  writeStoredAdminToken,
+} from './lib/adminSession.ts';
+import {
+  getAppRoute,
+  navigateToRoute,
+  restoreGitHubPagesSpaRedirect,
+} from './lib/routes.ts';
+import type { AppPortalRoute } from './lib/routes.ts';
+import { EntryPortalPage } from './components/EntryPortalPage.tsx';
+import { ControlTowerLoginPage } from './components/ControlTowerLoginPage.tsx';
+import { PublicMasterPlanPage } from './components/PublicMasterPlanPage.tsx';
+import { SiteFooter } from './components/SiteFooter.tsx';
 
 const STORAGE_KEY = 'alex_apparels_cluster1_plan_v2';
-const ADMIN_TOKEN_STORAGE_KEY = 'alex_apparels_admin_session_v1';
 const FILTER_PANEL_STORAGE_KEY = 'alex_apparels_filter_panel_open_v1';
 
 function readStoredFilterExpanded(): boolean {
@@ -83,29 +96,6 @@ function writeStoredFilterExpanded(expanded: boolean): void {
   try {
     if (typeof window === 'undefined') return;
     window.sessionStorage.setItem(FILTER_PANEL_STORAGE_KEY, expanded ? 'true' : 'false');
-  } catch {
-    // Ignore storage errors in restricted contexts
-  }
-}
-
-function readStoredAdminToken(): string | null {
-  try {
-    if (typeof window === 'undefined') return null;
-    const val = window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
-    return val && val.trim() ? val.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredAdminToken(token: string | null): void {
-  try {
-    if (typeof window === 'undefined') return;
-    if (token && token.trim()) {
-      window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token.trim());
-    } else {
-      window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-    }
   } catch {
     // Ignore storage errors in restricted contexts
   }
@@ -154,6 +144,13 @@ interface WorkspaceApiResponse {
 }
 
 export default function App() {
+  const [portalRoute, setPortalRoute] = useState<AppPortalRoute>(() =>
+    restoreGitHubPagesSpaRedirect()
+  );
+  const [checkingControlTowerAuth, setCheckingControlTowerAuth] = useState<boolean>(
+    () => getAppRoute() === 'control_tower'
+  );
+
   const [meta, setMeta] = useState<MasterPlanMeta | null>(null);
   const [records, setRecords] = useState<PlanningRecord[]>([]);
   const [cuttingEntries, setCuttingEntries] = useState<DailyCuttingEntry[]>([]);
@@ -185,6 +182,19 @@ export default function App() {
   const [bannerMessage, setBannerMessage] = useState<string | null>(null);
   const [hasCustomEdits, setHasCustomEdits] = useState(false);
   const [logoError, setLogoError] = useState(false);
+
+  const handleNavigatePortal = useCallback((nextRoute: AppPortalRoute) => {
+    navigateToRoute(nextRoute);
+    setPortalRoute(nextRoute);
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setPortalRoute(getAppRoute());
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
     if (typeof window === 'undefined') return 'dashboard';
@@ -309,6 +319,12 @@ export default function App() {
         credentials: 'include',
         headers: buildHeaders(false),
       });
+      if (res.status === 401 || res.status === 403) {
+        setSessionToken(null);
+        setAdminUnlocked(false);
+        setLoading(false);
+        return;
+      }
       if (!res.ok) {
         throw new Error(`Server responded with ${res.status}`);
       }
@@ -393,8 +409,67 @@ export default function App() {
   }, [buildHeaders, setSessionToken, syncWorkspaceToServer]);
 
   useEffect(() => {
-    loadWorkspaceFromServer();
-  }, [loadWorkspaceFromServer]);
+    if (portalRoute !== 'control_tower') {
+      setCheckingControlTowerAuth(false);
+      return;
+    }
+
+    let cancelled = false;
+    const verifyControlTowerAccess = async () => {
+      setCheckingControlTowerAuth(true);
+      try {
+        const res = await fetch(apiUrl('/api/admin/status'), {
+          credentials: 'include',
+          headers: buildHeaders(false),
+        });
+        if (!res.ok) {
+          throw new Error('Failed to check admin status');
+        }
+        const status = (await res.json()) as {
+          unlocked?: boolean;
+          needsInitialSetup?: boolean;
+          companyName?: string;
+          portalTitle?: string;
+          siteConfig?: WebsiteControlConfig;
+        };
+        if (cancelled) return;
+
+        setNeedsInitialSetup(Boolean(status.needsInitialSetup));
+        if (status.siteConfig) {
+          setSiteConfig(status.siteConfig);
+        } else if (status.companyName || status.portalTitle) {
+          setSiteConfig((prev) => ({
+            ...prev,
+            ...(status.companyName ? { companyName: status.companyName } : {}),
+            ...(status.portalTitle ? { portalTitle: status.portalTitle } : {}),
+          }));
+        }
+
+        if (status.unlocked) {
+          setAdminUnlocked(true);
+          setCheckingControlTowerAuth(false);
+          await loadWorkspaceFromServer();
+        } else {
+          setSessionToken(null);
+          setAdminUnlocked(false);
+          setCheckingControlTowerAuth(false);
+          setLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setSessionToken(null);
+          setAdminUnlocked(false);
+          setCheckingControlTowerAuth(false);
+          setLoading(false);
+        }
+      }
+    };
+
+    void verifyControlTowerAccess();
+    return () => {
+      cancelled = true;
+    };
+  }, [portalRoute, buildHeaders, loadWorkspaceFromServer, setSessionToken]);
 
   // Stabilize background polling refs so interval isn't recreated on each sync tick
   const cuttingSyncRefs = useRef({
@@ -412,7 +487,7 @@ export default function App() {
 
   // Periodically check for background server cutting-sheet updates when auto-sync is enabled
   useEffect(() => {
-    if (!cuttingSheetSync.enabled) return;
+    if (portalRoute !== 'control_tower' || !adminUnlocked || !cuttingSheetSync.enabled) return;
     const timer = window.setInterval(async () => {
       if (syncTimerRef.current) return;
       try {
@@ -860,7 +935,7 @@ export default function App() {
       const response = await fetch(apiUrl('/api/export-xlsx'), {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildHeaders(true),
         body: JSON.stringify({ meta, records, cuttingEntries, referenceDateIso }),
       });
       if (!response.ok) {
@@ -890,7 +965,7 @@ export default function App() {
       const response = await fetch(apiUrl('/api/export-selected-fo-xlsx'), {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildHeaders(true),
         body: JSON.stringify({
           meta,
           records,
@@ -973,11 +1048,30 @@ export default function App() {
     }
     setAdminUnlocked(true);
     setNeedsInitialSetup(false);
+    if (data.meta) setMeta(data.meta);
+    if (Array.isArray(data.records)) {
+      const normalizedRecords = data.records.map((r) => {
+        const status = (r.orderStatus ?? (r.isFinished ? 'Order Closed' : 'Open')) as OrderStatus;
+        const closed = status === 'Order Closed' || Boolean(r.isFinished);
+        return {
+          ...r,
+          orderStatus: status,
+          isFinished: closed,
+          isManualRunning: closed ? false : Boolean(r.isManualRunning),
+        };
+      });
+      setRecords(normalizedRecords);
+    }
+    if (Array.isArray(data.cuttingEntries)) setCuttingEntries(data.cuttingEntries);
+    if (data.referenceDateIso) setReferenceDateIso(data.referenceDateIso);
+    if (data.hasCustomEdits !== undefined) setHasCustomEdits(Boolean(data.hasCustomEdits));
     if (data.siteConfig) setSiteConfig(data.siteConfig);
     if (data.reminders) setReminders(data.reminders);
     if (data.smtpStatus) setSmtpStatus(data.smtpStatus);
     if (data.cuttingSheetSync) setCuttingSheetSync(data.cuttingSheetSync);
+    setLoading(false);
     setBannerMessage(null);
+    void loadWorkspaceFromServer();
   };
 
   const handleUnlockControlPanel = async (
@@ -1035,23 +1129,19 @@ export default function App() {
 
   const handleLockControlPanel = async () => {
     try {
-      const res = await fetch(apiUrl('/api/admin/lock'), {
+      await fetch(apiUrl('/api/admin/lock'), {
         method: 'POST',
         credentials: 'include',
         headers: buildHeaders(false),
       });
-      if (res.ok) {
-        const data = (await res.json()) as Partial<WorkspaceApiResponse>;
-        if (data.reminders) setReminders(data.reminders);
-        if (data.smtpStatus) setSmtpStatus(data.smtpStatus);
-        if (data.siteConfig) setSiteConfig(data.siteConfig);
-        if (data.cuttingSheetSync) setCuttingSheetSync(data.cuttingSheetSync);
-      }
     } catch {
-      // Ignore
+      // Ignore network errors on sign out
     }
     setSessionToken(null);
     setAdminUnlocked(false);
+    setMeta(null);
+    setRecords([]);
+    setCuttingEntries([]);
   };
 
   const handleUpdateSiteConfig = async (
@@ -1212,7 +1302,7 @@ export default function App() {
       const response = await fetch(apiUrl('/api/export-xlsx'), {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildHeaders(true),
         body: JSON.stringify({ meta, records, cuttingEntries, referenceDateIso }),
       });
       if (!response.ok) return null;
@@ -1862,8 +1952,52 @@ export default function App() {
     }
   }, []);
 
+  if (portalRoute === 'landing') {
+    return (
+      <>
+        <EntryPortalPage
+          companyName={siteConfig.companyName}
+          onNavigate={handleNavigatePortal}
+        />
+        <OfflineIndicator />
+      </>
+    );
+  }
+
+  if (portalRoute === 'master_plan') {
+    return (
+      <>
+        <PublicMasterPlanPage
+          onBackToPortal={() => handleNavigatePortal('landing')}
+        />
+        <OfflineIndicator />
+      </>
+    );
+  }
+
+  if (!adminUnlocked) {
+    return (
+      <>
+        <ControlTowerLoginPage
+          companyName={siteConfig.companyName}
+          portalTitle={siteConfig.portalTitle}
+          checkingSession={checkingControlTowerAuth}
+          needsInitialSetup={needsInitialSetup}
+          initialNotice={bannerMessage}
+          onUnlock={handleUnlockControlPanel}
+          onBootstrapAdmin={handleBootstrapAdmin}
+          onBackToPortal={() => {
+            setBannerMessage(null);
+            handleNavigatePortal('landing');
+          }}
+        />
+        <OfflineIndicator />
+      </>
+    );
+  }
+
   return (
-    <div className="min-h-screen flex bg-slate-50 text-slate-900">
+    <div className="app-shell-height flex robotics-workspace-bg text-slate-900">
       <Sidebar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -1883,15 +2017,18 @@ export default function App() {
 
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Top Bar with Company Logo on Left & Admin Session / App Link / AI / Upload / Download CTAs on Right */}
-        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200 px-3 sm:px-6 h-16 flex items-center justify-between gap-2 sm:gap-4">
+        <header className="sticky top-0 z-40 ct-header-glass ct-safe-header">
+          <div className="h-16 px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               aria-label="Open navigation menu"
-              className="lg:hidden h-10 w-10 inline-flex items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 shrink-0 cursor-pointer"
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation-drawer"
+              className="lg:hidden relative z-10 h-11 w-11 -ml-1 inline-flex items-center justify-center rounded-lg border border-slate-200/90 bg-white/90 text-slate-700 hover:bg-slate-50 active:bg-slate-100 shrink-0 cursor-pointer touch-manipulation"
             >
-              <Menu className="w-4 h-4" />
+              <Menu className="w-5 h-5" />
             </button>
 
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -1901,7 +2038,7 @@ export default function App() {
                   alt={siteConfig.companyName}
                   referrerPolicy="no-referrer"
                   onError={() => setLogoError(true)}
-                  className="h-7 sm:h-8 w-auto object-contain shrink-0"
+                  className="h-6 sm:h-8 max-w-[78px] sm:max-w-none w-auto object-contain shrink-0"
                 />
               ) : (
                 <span className="font-display text-sm font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0">
@@ -1933,17 +2070,17 @@ export default function App() {
                   ? 'Admin session active — click to sign out'
                   : 'Sign in as Admin to edit workspace data & settings'
               }
-              className={`h-9 sm:h-10 px-2.5 sm:px-3 rounded-lg border text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`h-9 sm:h-10 px-2.5 sm:px-3 rounded-lg border text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                 adminUnlocked
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                  ? 'border-teal-300/80 bg-teal-50/90 text-teal-900 hover:bg-teal-100/80 shadow-[0_2px_10px_-4px_rgba(13,148,136,0.35)]'
                   : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
               }`}
             >
               {adminUnlocked ? (
                 <>
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
                   <span className="hidden xl:inline">Admin Active</span>
-                  <LogOut className="w-3.5 h-3.5 text-emerald-700 hidden sm:inline shrink-0" />
+                  <LogOut className="w-3.5 h-3.5 text-teal-700 hidden sm:inline shrink-0" />
                 </>
               ) : (
                 <>
@@ -1969,16 +2106,16 @@ export default function App() {
                 setAppLinkModalOpen(true);
               }}
               title="Copy universal App Link & QR code for Android, iOS, and Desktop"
-              className={`h-9 sm:h-10 px-2.5 sm:px-3 rounded-lg border text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`h-9 sm:h-10 px-2.5 sm:px-3 rounded-lg border text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                 headerLinkCopied
-                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                  : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800'
+                  ? 'border-teal-300 bg-teal-50 text-teal-800'
+                  : 'border-cyan-200/80 bg-white/90 hover:border-cyan-400 hover:bg-cyan-50/60 text-slate-800'
               }`}
             >
               {headerLinkCopied ? (
-                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <Check className="w-4 h-4 text-teal-600 shrink-0" />
               ) : (
-                <Link2 className="w-4 h-4 text-blue-700 shrink-0" />
+                <Link2 className="w-4 h-4 text-cyan-700 shrink-0" />
               )}
               <span className="hidden md:inline">
                 {headerLinkCopied ? 'Copied' : 'App Link'}
@@ -1988,9 +2125,9 @@ export default function App() {
             <button
               type="button"
               onClick={() => setShehreenOpen((prev) => !prev)}
-              className="h-9 sm:h-10 px-2.5 sm:px-3.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="h-9 sm:h-10 px-2.5 sm:px-3.5 rounded-lg bg-gradient-to-r from-[#0a1633] via-[#102652] to-[#0891b2] hover:brightness-110 text-white text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 shadow-xs transition-all whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <Sparkles className="w-4 h-4 text-blue-300 shrink-0" />
+              <Sparkles className="w-4 h-4 text-cyan-200 shrink-0" />
               <span className="hidden sm:inline">Ask Shehreen</span>
               <span className="sm:hidden">AI</span>
             </button>
@@ -2006,9 +2143,9 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => headerUploadRef.current?.click()}
-                className="h-9 sm:h-10 px-2.5 sm:px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="h-9 sm:h-10 px-2.5 sm:px-3 rounded-lg border border-cyan-200/80 bg-white/90 hover:border-cyan-400 hover:bg-cyan-50/60 text-slate-800 text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Upload className="w-4 h-4 shrink-0" />
+                <Upload className="w-4 h-4 text-cyan-700 shrink-0" />
                 <span className="hidden xl:inline">Upload Plan</span>
               </button>
             )}
@@ -2017,7 +2154,7 @@ export default function App() {
               type="button"
               onClick={handleDownloadXlsx}
               disabled={loading || exporting || records.length === 0}
-              className="h-9 sm:h-10 px-2.5 sm:px-4 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="h-9 sm:h-10 px-2.5 sm:px-4 rounded-lg bg-gradient-to-r from-cyan-700 to-teal-700 hover:from-cyan-800 hover:to-teal-600 disabled:opacity-50 text-white text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 shadow-xs transition-all whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Download className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">
@@ -2026,11 +2163,12 @@ export default function App() {
               <span className="sm:hidden">{exporting ? '...' : '.xlsx'}</span>
             </button>
           </div>
+          </div>
         </header>
 
-        <main className="flex-1 px-3 sm:px-6 py-5 sm:py-6 space-y-5 max-w-[1600px] w-full mx-auto">
+        <main className="flex-1 ct-safe-x py-5 sm:py-6 space-y-5 max-w-[1600px] w-full mx-auto">
           {isEditingLocked && activeTab !== 'control_panel' && (
-            <div className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-700 shadow-xs">
+            <div className="ct-surface rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-700">
               <span className="inline-flex items-center gap-2">
                 <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                 <span>
@@ -2040,7 +2178,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => promptAdminSignIn()}
-                className="font-semibold text-blue-700 hover:text-blue-800 hover:underline whitespace-nowrap cursor-pointer"
+                className="font-semibold text-cyan-700 hover:text-cyan-800 hover:underline whitespace-nowrap cursor-pointer"
               >
                 Admin Sign In &rarr;
               </button>
@@ -2048,7 +2186,7 @@ export default function App() {
           )}
 
           {bannerMessage && (
-            <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 flex items-center justify-between gap-4 text-xs text-slate-800 shadow-xs">
+            <div className="ct-surface rounded-2xl px-4 py-3 flex items-center justify-between gap-4 text-xs text-slate-800">
               <span>{bannerMessage}</span>
               <button
                 type="button"
@@ -2061,7 +2199,7 @@ export default function App() {
           )}
 
           {error ? (
-            <div className="bg-white border border-red-200 rounded-xl p-6 space-y-3">
+            <div className="ct-surface border-red-200 rounded-2xl p-6 space-y-3">
               <div className="text-sm font-semibold text-red-800">
                 Unable to load master planning workbook
               </div>
@@ -2069,23 +2207,23 @@ export default function App() {
               <button
                 type="button"
                 onClick={loadWorkspaceFromServer}
-                className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800"
+                className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#0a1633] to-cyan-800 text-white text-xs font-medium hover:brightness-110 transition-all cursor-pointer"
               >
                 Retry Loading Plan
               </button>
             </div>
           ) : loading ? (
             <div className="space-y-4">
-              <div className="h-24 bg-white border border-slate-200 rounded-xl animate-pulse" />
+              <div className="h-24 ct-surface rounded-2xl animate-pulse" />
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 {[1, 2, 3, 4].map((n) => (
                   <div
                     key={n}
-                    className="h-28 bg-white border border-slate-200 rounded-xl animate-pulse"
+                    className="h-28 ct-surface rounded-2xl animate-pulse"
                   />
                 ))}
               </div>
-              <div className="h-80 bg-white border border-slate-200 rounded-xl animate-pulse" />
+              <div className="h-80 ct-surface rounded-2xl animate-pulse" />
             </div>
           ) : (
             <>
@@ -2284,6 +2422,15 @@ export default function App() {
             </>
           )}
         </main>
+
+        <SiteFooter
+          leftContent={
+            <span>
+              {siteConfig.companyName} — {siteConfig.portalTitle} ·{' '}
+              <span className="font-mono">ALEX 1 · ALEX 3 · ALEX 5 · ALEX 12</span>
+            </span>
+          }
+        />
       </div>
 
       <ShehreenAssistant
@@ -2305,11 +2452,15 @@ export default function App() {
       />
 
       {adminLoginModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-[2px] flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-6 space-y-5 shadow-xl">
+        <div className="fixed inset-0 z-50 bg-slate-950/55 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md ct-surface rounded-2xl p-6 space-y-5 shadow-2xl relative overflow-hidden">
+            <div
+              className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-[#0a1633] via-cyan-500 to-teal-500"
+              aria-hidden="true"
+            />
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0">
+                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#0a1633] to-cyan-700 text-white flex items-center justify-center shrink-0 shadow-sm">
                   <Lock className="w-5 h-5" />
                 </div>
                 <div>
@@ -2378,7 +2529,7 @@ export default function App() {
                     placeholder={
                       needsInitialSetup ? 'Create strong password' : 'Enter admin password'
                     }
-                    className="w-full h-11 pl-3.5 pr-10 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    className="w-full h-11 pl-3.5 pr-10 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                   />
                   <button
                     type="button"
@@ -2409,7 +2560,7 @@ export default function App() {
                     value={modalRecoveryEmail}
                     onChange={(e) => setModalRecoveryEmail(e.target.value)}
                     placeholder="planner@company.com"
-                    className="w-full h-11 px-3.5 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    className="w-full h-11 px-3.5 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-600"
                   />
                 </div>
               )}
@@ -2423,7 +2574,7 @@ export default function App() {
               <button
                 type="submit"
                 disabled={modalAuthBusy || !modalPassword}
-                className="w-full h-11 px-4 rounded-lg bg-slate-900 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full h-11 px-4 rounded-lg bg-gradient-to-r from-[#0a1633] via-[#122b5c] to-[#0891b2] hover:brightness-110 disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
               >
                 <Unlock className="w-4 h-4" />
                 <span>

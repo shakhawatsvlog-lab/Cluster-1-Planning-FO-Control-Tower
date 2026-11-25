@@ -5,17 +5,22 @@
     --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
     --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+    --robotics-canvas: #f4f8fd;
+    --robotics-navy: #0a1633;
+    --robotics-cyan: #0891b2;
+    --robotics-teal: #0d9488;
   }
 
-  html,
-  body {
-    overflow-x: clip;
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
 
   body {
     font-family: var(--font-sans);
-    background-color: #f8fafc;
+    background-color: var(--robotics-canvas);
     color: #0f172a;
+    overflow-x: clip;
     -webkit-tap-highlight-color: transparent;
   }
 
@@ -36,35 +41,381 @@
   font-variant-numeric: tabular-nums;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+/* ============================================================================
+   FUTURISTIC ROBOTICS MOTION KEYFRAMES (GPU COMPOSITOR PROPERTIES ONLY)
+   ============================================================================ */
+@keyframes roboticsEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes roboticsFloatA {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -5px, 0);
+  }
+}
+
+@keyframes roboticsFloatB {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -4px, 0);
+  }
+}
+
+@keyframes roboticsOrbDrift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(24px, -18px, 0) scale(1.06);
+  }
+}
+
+@keyframes roboticsOrbDriftReverse {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-26px, 16px, 0) scale(1.05);
+  }
+}
+
+@keyframes roboticsScanBeam {
+  0% {
+    transform: translate3d(0, -10vh, 0);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.65;
+  }
+  88% {
+    opacity: 0.5;
+  }
+  100% {
+    transform: translate3d(0, 108vh, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes roboticsNodeFloat {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translate3d(6px, -8px, 0);
+    opacity: 0.85;
+  }
+}
+
+@keyframes roboticsRippleExpand {
+  0% {
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0.55;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(3.2);
+    opacity: 0;
+  }
+}
+
+@keyframes roboticsCardActivationSweep {
+  0% {
+    transform: translate3d(-120%, 0, 0) skewX(-18deg);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate3d(240%, 0, 0) skewX(-18deg);
+    opacity: 0.95;
+  }
+}
+
+@keyframes roboticsBorderShimmer {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
   }
 }
 
 @layer components {
+  /* Subtle Futuristic Light Workspace Background (Control Tower & Master Plan) */
+  .robotics-workspace-bg {
+    background-color: #f4f8fd;
+    background-image:
+      radial-gradient(880px 420px at 14% -8%, rgba(6, 182, 212, 0.085), transparent 65%),
+      radial-gradient(760px 380px at 92% 4%, rgba(13, 148, 136, 0.07), transparent 60%),
+      linear-gradient(to right, rgba(15, 23, 42, 0.028) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(15, 23, 42, 0.028) 1px, transparent 1px);
+    background-size: auto, auto, 48px 48px, 48px 48px;
+  }
+
+  /* Entry Portal Fine Digital Grid */
+  .robotics-portal-grid {
+    background-image:
+      linear-gradient(to right, rgba(8, 145, 178, 0.065) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(8, 145, 178, 0.065) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(ellipse 85% 75% at 50% 42%, #000 45%, transparent 100%);
+  }
+
+  .robotics-orb-primary {
+    animation: roboticsOrbDrift 18s ease-in-out infinite;
+  }
+
+  .robotics-orb-secondary {
+    animation: roboticsOrbDriftReverse 22s ease-in-out infinite;
+  }
+
+  .robotics-scan-beam {
+    animation: roboticsScanBeam 11s linear infinite;
+  }
+
+  .robotics-node-float {
+    animation: roboticsNodeFloat 7s ease-in-out infinite;
+  }
+
+  .robotics-enter {
+    animation: roboticsEnter 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .robotics-enter-delay-1 {
+    animation: roboticsEnter 560ms cubic-bezier(0.16, 1, 0.3, 1) 80ms both;
+  }
+
+  .robotics-enter-delay-2 {
+    animation: roboticsEnter 560ms cubic-bezier(0.16, 1, 0.3, 1) 170ms both;
+  }
+
+  .robotics-float-a {
+    animation: roboticsFloatA 6.8s ease-in-out infinite;
+  }
+
+  .robotics-float-b {
+    animation: roboticsFloatB 7.4s ease-in-out 0.6s infinite;
+  }
+
+  .robotics-float-a:hover,
+  .robotics-float-b:hover,
+  .robotics-float-a:focus-within,
+  .robotics-float-b:focus-within {
+    animation-play-state: paused;
+  }
+
+  /* Futuristic Light Glassmorphic Portal Card */
+  .robotics-portal-card {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.92) 0%,
+      rgba(248, 251, 255, 0.84) 55%,
+      rgba(240, 249, 255, 0.88) 100%
+    );
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    box-shadow:
+      0 12px 34px -16px rgba(15, 23, 42, 0.14),
+      0 2px 6px -1px rgba(8, 145, 178, 0.06),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95);
+    transition:
+      transform 240ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 240ms cubic-bezier(0.16, 1, 0.3, 1),
+      box-shadow 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .robotics-portal-card:hover {
+    transform: translate3d(0, -5px, 0) scale(1.012);
+    border-color: rgba(6, 182, 212, 0.58);
+    box-shadow:
+      0 22px 46px -18px rgba(8, 145, 178, 0.25),
+      0 0 0 1px rgba(6, 182, 212, 0.24),
+      inset 0 1px 0 rgba(255, 255, 255, 1);
+  }
+
+  .robotics-portal-card-teal:hover {
+    border-color: rgba(13, 148, 136, 0.62);
+    box-shadow:
+      0 22px 46px -18px rgba(13, 148, 136, 0.26),
+      0 0 0 1px rgba(20, 184, 166, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 1);
+  }
+
+  /* Moving light reflection across portal cards on hover */
+  .robotics-light-sweep {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      115deg,
+      transparent 28%,
+      rgba(255, 255, 255, 0.65) 47%,
+      rgba(103, 232, 249, 0.22) 52%,
+      transparent 68%
+    );
+    transform: translate3d(-125%, 0, 0);
+    transition: transform 720ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .robotics-portal-card:hover .robotics-light-sweep {
+    transform: translate3d(125%, 0, 0);
+  }
+
+  .robotics-border-pulse {
+    animation: roboticsBorderShimmer 4.2s ease-in-out infinite;
+  }
+
+  .robotics-ripple-circle {
+    position: absolute;
+    width: 180px;
+    height: 180px;
+    border-radius: 9999px;
+    pointer-events: none;
+    animation: roboticsRippleExpand 520ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .robotics-activation-scan {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 48%;
+    pointer-events: none;
+    animation: roboticsCardActivationSweep 360ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  /* Dynamic viewport heights with 100vh fallback for iOS Safari & PWA */
+  .app-shell-height {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .sidebar-shell-height {
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  /* Frosted Light Corporate Surfaces for Control Tower & Master Plan */
+  .ct-header-glass {
+    background-color: rgba(255, 255, 255, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid rgba(14, 116, 144, 0.14);
+    box-shadow: 0 4px 24px -14px rgba(15, 23, 42, 0.12);
+  }
+
+  /* iOS Safe Area insets: 0px on desktop, full status-bar/Dynamic-Island clearance on iOS */
+  .ct-safe-header {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  .ct-safe-header::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-top, 0px);
+    background: linear-gradient(90deg, #07132c 0%, #0a1b3d 60%, #082c42 100%);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .ct-safe-sidebar-header {
+    padding-top: max(1rem, calc(env(safe-area-inset-top, 0px) + 0.5rem));
+    padding-left: max(1.25rem, env(safe-area-inset-left, 0px));
+    padding-right: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  .ct-safe-sidebar-footer {
+    padding-top: 0.875rem;
+    padding-bottom: max(0.875rem, calc(env(safe-area-inset-bottom, 0px) + 0.35rem));
+    padding-left: max(1rem, env(safe-area-inset-left, 0px));
+    padding-right: 1rem;
+  }
+
+  .ct-safe-footer {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  .ct-safe-x {
+    padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
+    padding-right: max(0.75rem, env(safe-area-inset-right, 0px));
+  }
+
+  @media (min-width: 640px) {
+    .ct-safe-x {
+      padding-left: max(1.5rem, env(safe-area-inset-left, 0px));
+      padding-right: max(1.5rem, env(safe-area-inset-right, 0px));
+    }
+  }
+
+  .ct-surface {
+    background-color: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    box-shadow:
+      0 6px 20px -12px rgba(15, 23, 42, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    transition:
+      border-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+      box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .ct-exec-banner {
+    background: linear-gradient(135deg, #07132c 0%, #0d2147 52%, #0a2d42 100%);
+    border: 1px solid rgba(34, 211, 238, 0.26);
+    box-shadow:
+      0 18px 36px -20px rgba(8, 145, 178, 0.42),
+      inset 0 1px 0 rgba(103, 232, 249, 0.16);
+  }
+
   .card-3d {
-    background-color: #ffffff;
-    border: 1px solid #e2e8f0;
-    box-shadow: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
-    transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-      box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1),
-      transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    background-color: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    box-shadow:
+      0 4px 14px -8px rgba(15, 23, 42, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    transition:
+      border-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+      box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1),
+      transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .card-3d-interactive:hover {
-    border-color: #cbd5e1;
-    box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.08);
+    border-color: rgba(8, 145, 178, 0.38);
+    box-shadow: 0 10px 24px -12px rgba(8, 145, 178, 0.16);
   }
 
   .card-3d-dark {
-    background-color: #0f172a;
-    border: 1px solid #1e293b;
-    box-shadow: 0 4px 12px -2px rgba(2, 6, 23, 0.25);
+    background: linear-gradient(145deg, #0a1734 0%, #0f2347 100%);
+    border: 1px solid rgba(56, 189, 248, 0.22);
+    box-shadow: 0 10px 26px -12px rgba(2, 6, 23, 0.35);
   }
 
   .gsi-material-button {
@@ -98,13 +449,179 @@
   }
 
   .gsi-material-button:hover:not(:disabled) {
-    box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.08);
+    box-shadow: 0 2px 8px -2px rgba(8, 145, 178, 0.18);
     background-color: #f8fafc;
-    border-color: #94a3b8;
+    border-color: #0891b2;
   }
 
   .gsi-material-button:disabled {
     cursor: default;
     opacity: 0.6;
+  }
+
+  /* Four-Factory Master Plan Interactive Selection Cards */
+  .mp-factory-card {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.94) 0%,
+      rgba(248, 251, 255, 0.88) 60%,
+      rgba(240, 249, 255, 0.9) 100%
+    );
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(148, 163, 184, 0.34);
+    box-shadow:
+      0 8px 24px -14px rgba(15, 23, 42, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.96);
+    transition:
+      transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      box-shadow 220ms cubic-bezier(0.16, 1, 0.3, 1),
+      background 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .mp-factory-card:hover {
+    transform: translate3d(0, -3px, 0);
+    border-color: rgba(8, 145, 178, 0.56);
+    box-shadow:
+      0 16px 32px -16px rgba(8, 145, 178, 0.25),
+      0 0 0 1px rgba(6, 182, 212, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 1);
+  }
+
+  .mp-factory-card:active {
+    transform: translate3d(0, -1px, 0) scale(0.985);
+  }
+
+  .mp-factory-card-active {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(135deg, #07132c 0%, #0b2248 56%, #0a354b 100%);
+    border: 1px solid rgba(34, 211, 238, 0.62);
+    box-shadow:
+      0 18px 34px -16px rgba(8, 145, 178, 0.45),
+      0 0 0 1px rgba(34, 211, 238, 0.25),
+      inset 0 1px 0 rgba(165, 243, 252, 0.24);
+    transition:
+      transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      box-shadow 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .mp-factory-card-active:hover {
+    transform: translate3d(0, -2px, 0);
+    border-color: rgba(103, 232, 249, 0.85);
+  }
+
+  .mp-factory-card-active:active {
+    transform: translate3d(0, 0, 0) scale(0.99);
+  }
+
+  .mp-factory-sweep {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      115deg,
+      transparent 28%,
+      rgba(255, 255, 255, 0.55) 47%,
+      rgba(34, 211, 238, 0.18) 53%,
+      transparent 68%
+    );
+    transform: translate3d(-125%, 0, 0);
+    transition: transform 680ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .mp-factory-card:hover .mp-factory-sweep {
+    transform: translate3d(125%, 0, 0);
+  }
+
+  .mp-factory-card-active .mp-factory-sweep {
+    background: linear-gradient(
+      115deg,
+      transparent 28%,
+      rgba(165, 243, 252, 0.18) 47%,
+      rgba(20, 184, 166, 0.16) 53%,
+      transparent 68%
+    );
+  }
+
+  .mp-factory-card-active:hover .mp-factory-sweep {
+    transform: translate3d(125%, 0, 0);
+  }
+
+  .mp-splash-loader-track {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .mp-splash-loader-bar {
+    position: absolute;
+    inset-y: 0;
+    left: 0;
+    width: 46%;
+    animation: mpSplashSlide 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  .mp-splash-halo {
+    animation: mpSplashHalo 3.2s ease-in-out infinite;
+  }
+}
+
+@keyframes mpSplashSlide {
+  0% {
+    transform: translate3d(-110%, 0, 0);
+  }
+  100% {
+    transform: translate3d(240%, 0, 0);
+  }
+}
+
+@keyframes mpSplashHalo {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.06);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .robotics-orb-primary,
+  .robotics-orb-secondary,
+  .robotics-scan-beam,
+  .robotics-node-float,
+  .robotics-float-a,
+  .robotics-float-b,
+  .robotics-border-pulse,
+  .mp-splash-loader-bar,
+  .mp-splash-halo {
+    animation: none !important;
+  }
+
+  .mp-splash-loader-bar {
+    width: 100%;
+    transform: none !important;
+  }
+
+  .robotics-portal-card:hover,
+  .mp-factory-card:hover,
+  .mp-factory-card:active,
+  .mp-factory-card-active:hover,
+  .mp-factory-card-active:active {
+    transform: none !important;
   }
 }
