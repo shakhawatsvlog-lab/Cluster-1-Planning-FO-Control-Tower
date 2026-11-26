@@ -4,9 +4,11 @@ import { formatDisplayDate } from '../shared/plannerTypes.ts';
 import type {
   FactoryName,
   MasterPlanMeta,
+  PublicFoNeededResponse,
   PublicMasterPlanRecord,
   PublicMasterPlanResponse,
 } from '../shared/plannerTypes.ts';
+import { BackendWakeupPanel } from './BackendWakeupPanel.tsx';
 import { isRecordInDateRange } from './FilterToolbar.tsx';
 import type { DateRangeFilterValue } from './FilterToolbar.tsx';
 import { MasterPlanInstallButton } from './MasterPlanInstallButton.tsx';
@@ -18,6 +20,11 @@ import {
 import { PublicFactoryPlanTable } from './PublicFactoryPlanTable.tsx';
 import { PublicFactorySelectorBar } from './PublicFactorySelectorBar.tsx';
 import { PublicFactorySummarySection } from './PublicFactorySummarySection.tsx';
+import { PublicFoNeededView } from './PublicFoNeededView.tsx';
+import {
+  PublicMasterPlanTabs,
+  type PublicMasterPlanTab,
+} from './PublicMasterPlanTabs.tsx';
 import { SiteFooter } from './SiteFooter.tsx';
 import { usePWAInstall } from '../hooks/usePWAInstall.ts';
 import { apiUrl } from '../lib/apiBase.ts';
@@ -29,6 +36,45 @@ const SPLASH_REDUCED_MOTION_MS = 120;
 const SPLASH_FAILSAFE_MAX_MS = 2400;
 const SPLASH_FADE_MS = 320;
 const APP_BASE_PREFIX = '/Cluster-1-Planning-FO-Control-Tower';
+const FETCH_TIMEOUT_MS = 12_000;
+
+class HttpStatusError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'HttpStatusError';
+    this.status = status;
+  }
+}
+
+function isColdStartOrNetworkFailure(err: unknown): boolean {
+  if (err instanceof HttpStatusError) {
+    return (
+      err.status === 502 ||
+      err.status === 503 ||
+      err.status === 504 ||
+      (err.status >= 520 && err.status <= 524)
+    );
+  }
+  if (err instanceof TypeError) {
+    return true;
+  }
+  if (err instanceof DOMException && err.name === 'AbortError') {
+    return true;
+  }
+  if (err instanceof Error) {
+    if (err.name === 'AbortError') return true;
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('load failed') ||
+      msg.includes('network request failed') ||
+      msg.includes('timed out')
+    );
+  }
+  return false;
+}
 
 function readInitialFactoryFromUrl(): string | null {
   try {
@@ -60,10 +106,15 @@ interface PublicMasterPlanPageProps {
 export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPageProps) {
   const { isInstalled } = usePWAInstall();
 
+  const [activeTab, setActiveTab] = useState<PublicMasterPlanTab>('master_plan');
+
   const [meta, setMeta] = useState<MasterPlanMeta | null>(null);
   const [factories, setFactories] = useState<FactoryName[]>([]);
   const [selectedFactory, setSelectedFactory] = useState<FactoryName | null>(null);
   const [records, setRecords] = useState<PublicMasterPlanRecord[]>([]);
+  const [cuttingSheetSummary, setCuttingSheetSummary] = useState<
+    PublicMasterPlanResponse['cuttingSheetSummary']
+  >(undefined);
   const [referenceDateIso, setReferenceDateIso] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
@@ -73,14 +124,20 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
   const [switchingFactory, setSwitchingFactory] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wakeupActive, setWakeupActive] = useState(false);
   const [logoError, setLogoError] = useState(false);
+
+  // FO Needed Tab State (Read-Only Mirror of Control Tower Selected FO Needed Summary Box)
+  const [foNeededData, setFoNeededData] = useState<PublicFoNeededResponse | null>(null);
+  const [foNeededLoading, setFoNeededLoading] = useState(false);
+  const [foNeededError, setFoNeededError] = useState<string | null>(null);
 
   // Branded in-app splash screen lifecycle (shown once per launch / direct URL load / refresh)
   const [splashPhase, setSplashPhase] = useState<'showing' | 'fading' | 'done'>('showing');
   const [initialDataSettled, setInitialDataSettled] = useState(false);
   const [minRevealDone, setMinRevealDone] = useState(false);
 
-  // Selected factory filters
+  // Selected factory filters (preserved across tab switches)
   const [selectedLine, setSelectedLine] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<PublicProductionStatusFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -92,11 +149,17 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
 
   const requestSeqRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const foAbortControllerRef = useRef<AbortController | null>(null);
   const selectedFactoryRef = useRef<FactoryName | null>(null);
+  const wakeupActiveRef = useRef(false);
 
   useEffect(() => {
     selectedFactoryRef.current = selectedFactory;
   }, [selectedFactory]);
+
+  useEffect(() => {
+    wakeupActiveRef.current = wakeupActive;
+  }, [wakeupActive]);
 
   // Isolate document PWA manifest, title, and Apple touch metadata strictly to Alpine Master Plan
   useEffect(() => {
@@ -178,6 +241,52 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
     };
   }, [splashPhase, initialDataSettled, minRevealDone]);
 
+  const fetchPublicFoNeeded = useCallback(async (quiet = false) => {
+    if (foAbortControllerRef.current) {
+      foAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    foAbortControllerRef.current = controller;
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, FETCH_TIMEOUT_MS);
+
+    if (!quiet) {
+      setFoNeededLoading(true);
+    }
+
+    try {
+      const res = await fetch(apiUrl('/api/public/fo-needed'), {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        throw new HttpStatusError(res.status, `Unable to fetch FO Needed (${res.status})`);
+      }
+
+      const data = (await res.json()) as PublicFoNeededResponse;
+      setFoNeededData(data);
+      setFoNeededError(null);
+      setWakeupActive(false);
+    } catch (err) {
+      if (controller.signal.aborted && !timedOut) return;
+      if (isColdStartOrNetworkFailure(err)) {
+        setWakeupActive(true);
+        setFoNeededError(null);
+      } else {
+        setFoNeededError(
+          err instanceof Error ? err.message : 'Unable to load FO Needed Checklist.'
+        );
+      }
+    } finally {
+      window.clearTimeout(timeoutId);
+      setFoNeededLoading(false);
+    }
+  }, []);
+
   const fetchFactoryMasterPlan = useCallback(
     async (
       targetFactory: string | null,
@@ -189,6 +298,11 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
       }
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      let timedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, FETCH_TIMEOUT_MS);
 
       if (mode === 'initial') {
         setLoading(true);
@@ -217,7 +331,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
         }
 
         if (!res.ok) {
-          throw new Error(`Unable to fetch Master Plan (${res.status})`);
+          throw new HttpStatusError(res.status, `Unable to fetch Master Plan (${res.status})`);
         }
 
         const data = (await res.json()) as PublicMasterPlanResponse;
@@ -242,6 +356,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
           syncFactoryQueryParam(resolvedFactory);
         }
         setRecords(Array.isArray(data.records) ? data.records : []);
+        setCuttingSheetSummary(data.cuttingSheetSummary);
         if (data.referenceDateIso) setReferenceDateIso(data.referenceDateIso);
         if (data.branding?.companyName) setCompanyName(data.branding.companyName);
         setLastSyncedAt(
@@ -252,10 +367,20 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
           })
         );
         setError(null);
+        setWakeupActive(false);
       } catch (err) {
-        if (controller.signal.aborted || seq !== requestSeqRef.current) return;
-        setError(err instanceof Error ? err.message : 'Unable to load live Master Plan.');
+        if ((controller.signal.aborted && !timedOut) || seq !== requestSeqRef.current) {
+          return;
+        }
+        if (isColdStartOrNetworkFailure(err)) {
+          setWakeupActive(true);
+          setError(null);
+        } else {
+          setWakeupActive(false);
+          setError(err instanceof Error ? err.message : 'Unable to load live Master Plan.');
+        }
       } finally {
+        window.clearTimeout(timeoutId);
         if (seq === requestSeqRef.current) {
           setLoading(false);
           setSwitchingFactory(false);
@@ -269,20 +394,32 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
     []
   );
 
-  // Initial load + 15s live polling scoped to currently selected factory
+  const refreshAllPublicViews = useCallback(
+    (mode: 'initial' | 'refresh' = 'refresh') => {
+      const target = selectedFactoryRef.current ?? readInitialFactoryFromUrl();
+      void fetchFactoryMasterPlan(target, mode);
+      void fetchPublicFoNeeded(true);
+    },
+    [fetchFactoryMasterPlan, fetchPublicFoNeeded]
+  );
+
+  // Initial load + 15s live polling scoped to currently selected factory + FO Needed
   useEffect(() => {
     const initialFromUrl = readInitialFactoryFromUrl();
     void fetchFactoryMasterPlan(initialFromUrl, 'initial');
+    void fetchPublicFoNeeded(false);
 
     const intervalId = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && !wakeupActiveRef.current) {
         void fetchFactoryMasterPlan(selectedFactoryRef.current, 'refresh');
+        void fetchPublicFoNeeded(true);
       }
     }, LIVE_POLL_INTERVAL_MS);
 
     const handleVisibilityOrFocus = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && !wakeupActiveRef.current) {
         void fetchFactoryMasterPlan(selectedFactoryRef.current, 'refresh');
+        void fetchPublicFoNeeded(true);
       }
     };
 
@@ -296,17 +433,34 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      if (foAbortControllerRef.current) {
+        foAbortControllerRef.current.abort();
+      }
     };
-  }, [fetchFactoryMasterPlan]);
+  }, [fetchFactoryMasterPlan, fetchPublicFoNeeded]);
 
   const handleSelectFactory = (factory: FactoryName) => {
-    if (factory === selectedFactory && !error) return;
+    if (factory === selectedFactory && !error && !wakeupActive) return;
     setSelectedFactory(factory);
     selectedFactoryRef.current = factory;
     setSelectedLine('ALL');
     syncFactoryQueryParam(factory);
     void fetchFactoryMasterPlan(factory, 'switch');
   };
+
+  const handleTabChange = (nextTab: PublicMasterPlanTab) => {
+    setActiveTab(nextTab);
+    if (nextTab === 'fo_needed' && !wakeupActive) {
+      void fetchPublicFoNeeded(!foNeededData ? false : true);
+    }
+  };
+
+  const handleWakeupRecovered = useCallback(() => {
+    setWakeupActive(false);
+    setError(null);
+    setFoNeededError(null);
+    refreshAllPublicViews('refresh');
+  }, [refreshAllPublicViews]);
 
   // Defense-in-depth: strictly enforce single-factory record isolation in UI state
   const factoryRecords = useMemo(() => {
@@ -369,80 +523,101 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
       {/* Isolated Public Master Plan Header — ZERO Control Tower menus or Admin controls */}
       <header className="sticky top-0 z-40 ct-header-glass ct-safe-header">
         <div className="h-16 px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-3">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          {!logoError ? (
-            <img
-              src={`${import.meta.env.BASE_URL}assets/aistudio/OIP__1__63903905.webp`}
-              alt={companyName}
-              referrerPolicy="no-referrer"
-              onError={() => setLogoError(true)}
-              className="h-7 sm:h-8 w-auto object-contain shrink-0"
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {!logoError ? (
+              <img
+                src={`${import.meta.env.BASE_URL}assets/aistudio/OIP__1__63903905.webp`}
+                alt={companyName}
+                referrerPolicy="no-referrer"
+                onError={() => setLogoError(true)}
+                className="h-7 sm:h-8 w-auto object-contain shrink-0"
+              />
+            ) : (
+              <span className="font-display text-sm font-bold tracking-tight text-slate-950 whitespace-nowrap shrink-0">
+                {companyName.toUpperCase()}
+              </span>
+            )}
+            <span
+              className="hidden sm:inline-block h-5 w-px bg-cyan-900/15 shrink-0"
+              aria-hidden="true"
             />
-          ) : (
-            <span className="font-display text-sm font-bold tracking-tight text-slate-950 whitespace-nowrap shrink-0">
-              {companyName.toUpperCase()}
-            </span>
-          )}
-          <span
-            className="hidden sm:inline-block h-5 w-px bg-cyan-900/15 shrink-0"
-            aria-hidden="true"
-          />
-          <div className="min-w-0">
-            <h1 className="font-display font-semibold text-sm sm:text-base text-slate-950 truncate">
-              Alpine Master Plan
-            </h1>
-            <p className="hidden md:block text-[11px] text-slate-500 font-mono truncate">
-              Read-Only Factory Dashboard
-              {selectedFactory ? ` · ${selectedFactory}` : ''}
-              {meta?.asOfDateRaw ? ` · As Of ${meta.asOfDateRaw}` : ''}
-            </p>
+            <div className="min-w-0">
+              <h1 className="font-display font-semibold text-sm sm:text-base text-slate-950 truncate">
+                Alpine Master Plan
+              </h1>
+              <p className="hidden md:block text-[11px] text-slate-500 font-mono truncate">
+                Read-Only Factory Dashboard
+                {selectedFactory ? ` · ${selectedFactory}` : ''}
+                {meta?.asOfDateRaw ? ` · As Of ${meta.asOfDateRaw}` : ''}
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          {lastSyncedAt && (
-            <span className="hidden xl:inline text-xs font-mono tabular-nums text-slate-500 whitespace-nowrap">
-              Synced {lastSyncedAt}
-            </span>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {lastSyncedAt && (
+              <span className="hidden xl:inline text-xs font-mono tabular-nums text-slate-500 whitespace-nowrap">
+                Synced {lastSyncedAt}
+              </span>
+            )}
 
-          <MasterPlanInstallButton />
+            <MasterPlanInstallButton />
 
-          <button
-            type="button"
-            onClick={() => void fetchFactoryMasterPlan(selectedFactory, 'refresh')}
-            disabled={refreshing || switchingFactory}
-            title="Refresh live Master Plan data"
-            className="h-9 px-3.5 rounded-lg bg-gradient-to-r from-[#0a1633] via-cyan-800 to-teal-700 hover:from-[#0f224d] hover:to-teal-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-[0_6px_16px_-6px_rgba(13,148,136,0.45)] transition-all cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0"
-          >
-            <RefreshCw
-              className={`w-3.5 h-3.5 ${refreshing || switchingFactory ? 'animate-spin' : ''}`}
-            />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
-
-          {/* When running inside installed standalone Master Plan app, keep navigation strictly isolated */}
-          {!isInstalled && (
-            <a
-              href={buildRouteHref('landing')}
-              onClick={(e) => {
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-                e.preventDefault();
-                onBackToPortal();
-              }}
-              className="h-9 px-3 rounded-lg border border-slate-300/85 bg-white/90 hover:bg-white hover:border-cyan-500/60 text-slate-700 hover:text-slate-950 text-xs font-semibold inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0"
+            <button
+              type="button"
+              onClick={() => refreshAllPublicViews('refresh')}
+              disabled={refreshing || switchingFactory}
+              title="Refresh live Master Plan data"
+              className="h-9 px-3.5 rounded-lg bg-gradient-to-r from-[#0a1633] via-cyan-800 to-teal-700 hover:from-[#0f224d] hover:to-teal-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-[0_6px_16px_-6px_rgba(13,148,136,0.45)] transition-all cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Entry Portal</span>
-            </a>
-          )}
-        </div>
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${refreshing || switchingFactory ? 'animate-spin' : ''}`}
+              />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+
+            {/* When running inside installed standalone Master Plan app, keep navigation strictly isolated */}
+            {!isInstalled && (
+              <a
+                href={buildRouteHref('landing')}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                  e.preventDefault();
+                  onBackToPortal();
+                }}
+                className="h-9 px-3 rounded-lg border border-slate-300/85 bg-white/90 hover:bg-white hover:border-cyan-500/60 text-slate-700 hover:text-slate-950 text-xs font-semibold inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Entry Portal</span>
+              </a>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* Main Four-Factory Interactive Dashboard */}
+      {/* Two Clear Medium Tabs Directly Below Header: MASTER PLAN | FO NEEDED */}
+      <PublicMasterPlanTabs
+        activeTab={activeTab}
+        onChangeTab={handleTabChange}
+        foNeededCount={foNeededData?.rows.length ?? null}
+      />
+
+      {/* Main Content Area */}
       <main className="flex-1 ct-safe-x py-5 sm:py-6 space-y-6 max-w-[1600px] w-full mx-auto robotics-enter">
-        {error ? (
+        {wakeupActive ? (
+          <BackendWakeupPanel
+            onReconnected={handleWakeupRecovered}
+            onManualRetry={() => refreshAllPublicViews('refresh')}
+            isRetrying={refreshing || loading}
+          />
+        ) : activeTab === 'fo_needed' ? (
+          <PublicFoNeededView
+            data={foNeededData}
+            loading={foNeededLoading}
+            error={foNeededError}
+            selectedFactory={selectedFactory}
+            onRetry={() => void fetchPublicFoNeeded(false)}
+          />
+        ) : error ? (
           <div className="ct-surface border-red-200 rounded-2xl p-6 space-y-3">
             <div className="text-sm font-semibold text-red-800">
               Unable to load live Master Plan
@@ -474,7 +649,12 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
             <div className="h-96 ct-surface rounded-2xl animate-pulse" />
           </div>
         ) : (
-          <>
+          <div
+            id="panel-master-plan"
+            role="tabpanel"
+            aria-labelledby="tab-master-plan"
+            className="space-y-6"
+          >
             {/* 1. Four Factory Interactive Selection Bar */}
             <PublicFactorySelectorBar
               factories={factories}
@@ -492,6 +672,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
                   referenceDateIso={referenceDateIso}
                   factoryRecords={factoryRecords}
                   filteredRecords={filteredRecords}
+                  cuttingSheetSummary={cuttingSheetSummary}
                   isFiltered={hasAnyFilter}
                   isSwitching={switchingFactory}
                 />
@@ -525,7 +706,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
                 />
               </div>
             )}
-          </>
+          </div>
         )}
       </main>
 

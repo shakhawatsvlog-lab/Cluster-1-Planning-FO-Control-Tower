@@ -570,6 +570,8 @@ export default function App() {
         plannedQty: number | null;
         foIssueQty: number | null;
         dailyTargetQty: number | null;
+        packingQty: number | null;
+        packingUpdatedAtIso: string | null;
         endDateIso: string | null;
         isFinished: boolean;
         orderStatus: OrderStatus;
@@ -606,6 +608,56 @@ export default function App() {
       });
     },
     [isEditingLocked, meta, cuttingEntries, persistState, promptAdminSignIn]
+  );
+
+  const handleUpdatePackingQty = useCallback(
+    async (recordIds: string[], packingQty: number | null) => {
+      if (isEditingLocked) {
+        promptAdminSignIn('Admin sign-in is required to update Packing Qty.');
+        return;
+      }
+      const cleanIds = recordIds.filter(Boolean);
+      if (cleanIds.length === 0) return;
+      const sanitized =
+        packingQty !== null && Number.isFinite(packingQty) && packingQty >= 0
+          ? Math.round(packingQty)
+          : null;
+      const nowIso = sanitized !== null ? new Date().toISOString() : null;
+
+      setRecords((prev) => {
+        const idSet = new Set(cleanIds);
+        const next = prev.map((r) =>
+          idSet.has(r.id)
+            ? { ...r, packingQty: sanitized, packingUpdatedAtIso: nowIso }
+            : r
+        );
+        if (meta) saveLocalBackup(meta, next, cuttingEntries);
+        return next;
+      });
+      setHasCustomEdits(true);
+
+      try {
+        const res = await fetch(apiUrl('/api/packing'), {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: buildHeaders(true),
+          body: JSON.stringify({ recordIds: cleanIds, packingQty: sanitized }),
+        });
+        if (res.status === 401 || res.status === 403) {
+          setAdminUnlocked(false);
+          setSessionToken(null);
+          promptAdminSignIn('Admin session expired. Sign in again to save Packing Qty.');
+          return;
+        }
+        if (!res.ok) {
+          const errPayload = (await res.json().catch(() => null)) as { error?: string } | null;
+          setBannerMessage(errPayload?.error || 'Unable to save Packing Qty to server.');
+        }
+      } catch (err) {
+        console.error('Failed to persist Admin packing qty:', err);
+      }
+    },
+    [isEditingLocked, promptAdminSignIn, buildHeaders, setSessionToken, meta, cuttingEntries, saveLocalBackup]
   );
 
   const handleBulkUpdateRecords = useCallback(
@@ -795,6 +847,9 @@ export default function App() {
           plannedQty: match.plannedQty,
           foIssueQty: match.foIssueQty,
           cuttingBaseQty: match.cuttingBaseQty,
+          cuttingInputQty: match.cuttingInputQty ?? null,
+          packingQty: match.packingQty ?? null,
+          packingUpdatedAtIso: match.packingUpdatedAtIso ?? null,
           dailyTargetQty: match.dailyTargetQty,
           isFinished: match.isFinished,
           orderStatus: match.orderStatus,
@@ -2314,6 +2369,7 @@ export default function App() {
                   onAddCuttingEntry={handleAddCuttingEntry}
                   onDeleteCuttingEntry={handleDeleteCuttingEntry}
                   onUpdateRecord={handleUpdateRecord}
+                  onUpdatePackingQty={handleUpdatePackingQty}
                   onSetRunningStyle={handleSetRunningStyle}
                 />
               )}

@@ -16,6 +16,7 @@ import {
 import {
   ALLOWED_FACTORIES,
   ORDER_STATUS_OPTIONS,
+  computePackingSummary,
   formatDisplayDate,
 } from '../shared/plannerTypes.ts';
 import type {
@@ -58,10 +59,13 @@ interface DailyCuttingEntryViewProps {
       plannedQty: number | null;
       foIssueQty: number | null;
       dailyTargetQty: number | null;
+      packingQty: number | null;
+      packingUpdatedAtIso: string | null;
       endDateIso: string | null;
       orderStatus: OrderStatus;
     }>
   ) => void;
+  onUpdatePackingQty?: (recordIds: string[], packingQty: number | null) => Promise<void> | void;
   onSetRunningStyle: (recordId: string) => void;
 }
 
@@ -77,6 +81,7 @@ export function DailyCuttingEntryView({
   onAddCuttingEntry,
   onDeleteCuttingEntry,
   onUpdateRecord,
+  onUpdatePackingQty,
   onSetRunningStyle,
 }: DailyCuttingEntryViewProps) {
   // Online Cutting Sheet Sync draft state
@@ -364,9 +369,12 @@ export function DailyCuttingEntryView({
         style: string;
         lines: string[];
         recordIds: string[];
+        primaryRecordId: string;
         orderQty: number | null;
         dailyTargetQty: number | null;
+        cuttingInputQty: number | null;
         cuttingFinishedQty: number;
+        packingQty: number | null;
         latestDateIso: string;
         hasSheet: boolean;
         hasRunning: boolean;
@@ -391,9 +399,12 @@ export function DailyCuttingEntryView({
           style: rec.style,
           lines: [rec.line],
           recordIds: [rec.id],
+          primaryRecordId: rec.id,
           orderQty: rec.plannedQty,
           dailyTargetQty: rec.dailyTargetQty,
+          cuttingInputQty: rec.cuttingInputQty,
           cuttingFinishedQty: Math.max(sheetPlusManual, rec.cuttingFinishedQty),
+          packingQty: rec.packingQty,
           latestDateIso: entryMeta?.latestDateIso || '',
           hasSheet: Boolean(entryMeta?.hasSheet),
           hasRunning: rec.lifecycleStage === 'Running',
@@ -402,11 +413,20 @@ export function DailyCuttingEntryView({
       } else {
         if (!existing.lines.includes(rec.line)) existing.lines.push(rec.line);
         existing.recordIds.push(rec.id);
+        if (rec.lifecycleStage === 'Running' && !existing.hasRunning) {
+          existing.primaryRecordId = rec.id;
+        }
         if (existing.orderQty === null && rec.plannedQty !== null) {
           existing.orderQty = rec.plannedQty;
         }
         if (existing.dailyTargetQty === null && rec.dailyTargetQty !== null) {
           existing.dailyTargetQty = rec.dailyTargetQty;
+        }
+        if (existing.cuttingInputQty === null && rec.cuttingInputQty !== null) {
+          existing.cuttingInputQty = rec.cuttingInputQty;
+        }
+        if (rec.packingQty !== null) {
+          existing.packingQty = (existing.packingQty ?? 0) + rec.packingQty;
         }
         if (rec.lifecycleStage === 'Running') existing.hasRunning = true;
         if (rec.orderStatus !== 'Order Closed') existing.allClosed = false;
@@ -420,6 +440,7 @@ export function DailyCuttingEntryView({
             (r) =>
               r.hasSheet ||
               r.cuttingFinishedQty > 0 ||
+              r.packingQty !== null ||
               r.orderQty !== null ||
               r.dailyTargetQty !== null
           )
@@ -440,19 +461,37 @@ export function DailyCuttingEntryView({
   const pgTotalsSummary = useMemo(() => {
     let totalOrderQty = 0;
     let totalCutQty = 0;
+    let totalPackQty = 0;
     let totalDailyTarget = 0;
     for (const r of pgSummaryRows) {
       totalOrderQty += r.orderQty ?? 0;
       totalCutQty += r.cuttingFinishedQty;
+      totalPackQty += r.packingQty ?? 0;
       totalDailyTarget += r.dailyTargetQty ?? 0;
     }
     return {
       pgCount: pgSummaryRows.length,
       totalOrderQty,
       totalCutQty,
+      totalPackQty,
       totalDailyTarget,
     };
   }, [pgSummaryRows]);
+
+  const handlePackingChange = (targetIds: string[], rawValue: string) => {
+    const trimmed = rawValue.trim();
+    const parsed = trimmed === '' ? null : Number(trimmed);
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) return;
+    const nextVal = parsed === null ? null : Math.round(parsed);
+    if (onUpdatePackingQty) {
+      void onUpdatePackingQty(targetIds, nextVal);
+    } else {
+      const nowIso = nextVal !== null ? new Date().toISOString() : null;
+      for (const rid of targetIds) {
+        onUpdateRecord(rid, { packingQty: nextVal, packingUpdatedAtIso: nowIso });
+      }
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -868,27 +907,34 @@ export function DailyCuttingEntryView({
         )}
       </div>
 
-      {/* PG-Wise Latest Cutting, Auto-Filled Order Qty & Daily Target Summary */}
+      {/* PG-Wise Latest Cutting, Packing & Daily Target Summary */}
       <div className="ct-surface rounded-2xl overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/60">
           <div>
             <h3 className="font-display text-sm font-semibold text-slate-900">
-              PG-Wise Latest Cutting, Order Qty &amp; Daily Target ({pgTotalsSummary.pgCount} PG#)
+              PG-Wise Latest Cutting, Packing &amp; Daily Target ({pgTotalsSummary.pgCount} PG#)
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Auto-filled from your uploaded / linked sheet: Order Qty:{' '}
+              Order Qty:{' '}
               <span className="font-mono font-semibold text-slate-900">
                 {pgTotalsSummary.totalOrderQty.toLocaleString()}
               </span>{' '}
-              pcs · Latest Total Cut:{' '}
+              pcs · Cutting Output:{' '}
               <span className="font-mono font-semibold text-teal-700">
                 {pgTotalsSummary.totalCutQty.toLocaleString()}
+              </span>{' '}
+              pcs · Packed:{' '}
+              <span className="font-mono font-semibold text-cyan-800">
+                {pgTotalsSummary.totalPackQty.toLocaleString()}
               </span>{' '}
               pcs · Daily Target Sum:{' '}
               <span className="font-mono font-semibold text-blue-700">
                 {pgTotalsSummary.totalDailyTarget.toLocaleString()}
               </span>{' '}
               /day
+            </p>
+            <p className="text-[11px] text-amber-800 mt-1">
+              Note: Online Cutting sheet does not provide a separate Packing Qty column — enter Packing Qty below (Admin-only) to update Balance to Pack and Packing Status on the public Master Plan.
             </p>
           </div>
           <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg text-xs">
@@ -926,7 +972,10 @@ export function DailyCuttingEntryView({
                 <th className="py-2.5 px-3.5 whitespace-nowrap">Style · Lines</th>
                 <th className="py-2.5 px-3.5 whitespace-nowrap">Latest Update Date</th>
                 <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Order Qty (PG)</th>
-                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Latest Total Cutting</th>
+                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Cutting Output</th>
+                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Packing Qty (Admin)</th>
+                <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Balance to Pack</th>
+                <th className="py-2.5 px-3.5 whitespace-nowrap">Packing Status</th>
                 <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Balance to Cut</th>
                 <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Daily Target</th>
                 <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Days Left</th>
@@ -936,7 +985,7 @@ export function DailyCuttingEntryView({
             <tbody className="divide-y divide-slate-200 text-xs">
               {pgSummaryRows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-slate-500">
+                  <td colSpan={13} className="py-8 text-center text-slate-500">
                     No PG-wise cutting or order qty synced yet for this filter. Upload an .xlsx / .csv file or sync an online link above.
                   </td>
                 </tr>
@@ -953,6 +1002,15 @@ export function DailyCuttingEntryView({
                         ? 0
                         : null;
                   const alert10d = daysLeft !== null && daysLeft <= 10 && !row.allClosed;
+                  const packSummary = computePackingSummary(row.cuttingFinishedQty, row.packingQty);
+                  const packBadgeClass =
+                    packSummary.packingStatus === 'Over Packed'
+                      ? 'bg-red-50 border-red-300 text-red-800'
+                      : packSummary.packingStatus === 'Completed'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : packSummary.packingStatus === 'In Progress'
+                          ? 'bg-cyan-50 border-cyan-200 text-cyan-800'
+                          : 'bg-slate-100 border-slate-200 text-slate-600';
                   return (
                     <tr key={row.key} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-2.5 px-3.5 whitespace-nowrap font-semibold text-slate-900">
@@ -996,6 +1054,35 @@ export function DailyCuttingEntryView({
                       </td>
                       <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-bold text-teal-700 whitespace-nowrap">
                         {row.cuttingFinishedQty.toLocaleString()}
+                      </td>
+                      <td className="py-2.5 px-3.5 text-right whitespace-nowrap">
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="Not set"
+                          value={row.packingQty === null ? '' : row.packingQty}
+                          onChange={(e) => handlePackingChange([row.primaryRecordId], e.target.value)}
+                          aria-label={`Packing Qty for ${row.factory} ${row.pgNumber}`}
+                          className="w-24 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border border-cyan-300 bg-white font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-600"
+                        />
+                      </td>
+                      <td
+                        className={`py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap font-semibold ${
+                          packSummary.packingStatus === 'Over Packed'
+                            ? 'text-red-700'
+                            : 'text-slate-800'
+                        }`}
+                      >
+                        {packSummary.balanceToPack !== null
+                          ? packSummary.balanceToPack.toLocaleString()
+                          : '—'}
+                      </td>
+                      <td className="py-2.5 px-3.5 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded border text-[11px] font-semibold ${packBadgeClass}`}
+                        >
+                          {packSummary.packingStatus}
+                        </span>
                       </td>
                       <td className="py-2.5 px-3.5 text-right font-mono tabular-nums text-slate-700 whitespace-nowrap">
                         {balance !== null ? balance.toLocaleString() : '—'}
@@ -1293,6 +1380,7 @@ export function DailyCuttingEntryView({
                 <th className="py-2.5 px-3 text-right whitespace-nowrap">Order Qty</th>
                 <th className="py-2.5 px-3 text-right whitespace-nowrap">Daily Target</th>
                 <th className="py-2.5 px-3 text-right whitespace-nowrap">Cut Finished</th>
+                <th className="py-2.5 px-3 text-right whitespace-nowrap">Packing Qty (Admin)</th>
                 <th className="py-2.5 px-3 text-right whitespace-nowrap">Days Left</th>
                 <th className="py-2.5 px-3 whitespace-nowrap">End Date (Edit)</th>
                 <th className="py-2.5 px-3 whitespace-nowrap">Add Cutting ({entryDateIso.slice(5)})</th>
@@ -1302,7 +1390,7 @@ export function DailyCuttingEntryView({
             <tbody className="divide-y divide-slate-200 text-xs">
               {runningLinesInScope.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-slate-500">
+                  <td colSpan={11} className="py-8 text-center text-slate-500">
                     No active running lines match the current filter.
                   </td>
                 </tr>
@@ -1352,6 +1440,17 @@ export function DailyCuttingEntryView({
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-teal-700 whitespace-nowrap">
                         {rec.cuttingFinishedQty.toLocaleString()}
+                      </td>
+                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="Not set"
+                          value={rec.packingQty === null || rec.packingQty === undefined ? '' : rec.packingQty}
+                          onChange={(e) => handlePackingChange([rec.id], e.target.value)}
+                          aria-label={`Packing Qty for ${rec.factory} ${rec.line} ${rec.pgNumber}`}
+                          className="w-24 h-8 px-2 text-right font-mono tabular-nums text-xs rounded border border-cyan-300 bg-white focus:outline-none focus:ring-2 focus:ring-cyan-600"
+                        />
                       </td>
                       <td
                         className={`py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap ${

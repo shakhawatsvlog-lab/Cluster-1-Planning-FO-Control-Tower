@@ -591,6 +591,93 @@
   }
 }
 
+/* ============================================================================
+   BACKEND SLEEP / COLD START WAKE-UP SCENE ANIMATIONS
+   ============================================================================ */
+@keyframes mpMouseScurry {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  30% {
+    transform: translate3d(-5px, -1.5px, 0) rotate(-2deg);
+  }
+  65% {
+    transform: translate3d(-9px, 1px, 0) rotate(1.5deg);
+  }
+}
+
+@keyframes mpCableSpark {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+}
+
+@keyframes mpCatHeadTilt {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  35% {
+    transform: rotate(-7deg);
+  }
+  70% {
+    transform: rotate(5deg);
+  }
+}
+
+@keyframes mpCatTailWag {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(10deg);
+  }
+}
+
+@keyframes mpCatQuestionFloat {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.82;
+  }
+  50% {
+    transform: translate3d(0, -4px, 0);
+    opacity: 1;
+  }
+}
+
+.mp-mouse-tug {
+  transform-origin: 95px 118px;
+  animation: mpMouseScurry 2.1s ease-in-out infinite;
+}
+
+.mp-cable-spark {
+  transform-origin: center;
+  animation: mpCableSpark 1.3s ease-in-out infinite;
+}
+
+.mp-cat-head {
+  transform-origin: 244px 78px;
+  animation: mpCatHeadTilt 3.2s ease-in-out infinite;
+}
+
+.mp-cat-tail {
+  transform-origin: 274px 124px;
+  animation: mpCatTailWag 2.4s ease-in-out infinite;
+}
+
+.mp-cat-question {
+  animation: mpCatQuestionFloat 2.2s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -608,7 +695,12 @@
   .robotics-float-b,
   .robotics-border-pulse,
   .mp-splash-loader-bar,
-  .mp-splash-halo {
+  .mp-splash-halo,
+  .mp-mouse-tug,
+  .mp-cable-spark,
+  .mp-cat-head,
+  .mp-cat-tail,
+  .mp-cat-question {
     animation: none !important;
   }
 

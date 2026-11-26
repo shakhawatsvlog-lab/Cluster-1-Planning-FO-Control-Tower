@@ -1,7 +1,11 @@
 import { useMemo, useState } from 'react';
-import { ArrowUpDown, RotateCcw } from 'lucide-react';
+import { AlertTriangle, ArrowUpDown, RotateCcw } from 'lucide-react';
 import { formatDisplayDate } from '../shared/plannerTypes.ts';
-import type { FactoryName, PublicMasterPlanRecord } from '../shared/plannerTypes.ts';
+import type {
+  FactoryName,
+  PackingStatus,
+  PublicMasterPlanRecord,
+} from '../shared/plannerTypes.ts';
 import { ActionMessageDisplay, RiskStatusDisplay } from './StatusCell.tsx';
 
 type SortKey = 'default' | 'endDate' | 'triggerDate' | 'capacity';
@@ -14,6 +18,108 @@ interface PublicFactoryPlanTableProps {
   hasActiveFilters: boolean;
   dateRangeActive: boolean;
   onResetFilters: () => void;
+}
+
+function renderPackingStatusBadge(status: PackingStatus) {
+  if (status === 'Over Packed') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-red-300 bg-red-50 text-red-700 font-semibold text-[11px] whitespace-nowrap">
+        <AlertTriangle className="w-3 h-3 shrink-0" />
+        <span>Over Packed</span>
+      </span>
+    );
+  }
+  if (status === 'Completed') {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-800 font-semibold text-[11px] whitespace-nowrap">
+        Completed
+      </span>
+    );
+  }
+  if (status === 'In Progress') {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded border border-cyan-200 bg-cyan-50 text-cyan-800 font-semibold text-[11px] whitespace-nowrap">
+        In Progress
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded border border-slate-200 bg-slate-100 text-slate-600 font-medium text-[11px] whitespace-nowrap">
+      Not Started
+    </span>
+  );
+}
+
+function renderEndDateCell(endDateIso: string | null) {
+  if (!endDateIso) {
+    return <span className="text-slate-400">—</span>;
+  }
+  return (
+    <div className="space-y-0.5">
+      <div className="font-mono tabular-nums font-medium text-slate-900">
+        {formatDisplayDate(endDateIso)}
+      </div>
+      <span className="inline-block px-1.5 py-px rounded bg-slate-100 border border-slate-200 text-[9px] font-semibold tracking-wide text-slate-600 uppercase">
+        CONFIRMED
+      </span>
+    </div>
+  );
+}
+
+function renderEstimatedOutputStartCell(rec: PublicMasterPlanRecord) {
+  if (rec.lifecycleStage === 'Upcoming (Next)') {
+    if (rec.estimatedOutputStatus === 'available' && rec.estimatedOutputStartIso) {
+      return (
+        <div
+          className="space-y-0.5"
+          title={`Estimated from Running ${rec.precedingRunningPgNumber || 'style'} End Date (${formatDisplayDate(
+            rec.precedingRunningEndDateIso
+          )}) + 1 Day`}
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono tabular-nums font-semibold text-teal-900">
+              {formatDisplayDate(rec.estimatedOutputStartIso)}
+            </span>
+            <span className="inline-block px-1.5 py-px rounded bg-teal-50 border border-teal-300 text-[9px] font-bold tracking-wide text-teal-800 uppercase">
+              ESTIMATED
+            </span>
+          </div>
+          <div className="text-[10px] text-slate-500 font-mono tabular-nums">
+            Run {rec.precedingRunningPgNumber || 'style'} ends{' '}
+            {formatDisplayDate(rec.precedingRunningEndDateIso)} + 1D
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[11px] font-medium whitespace-nowrap">
+        Awaiting Running Style End Date
+      </span>
+    );
+  }
+
+  if (rec.lifecycleStage === 'Running') {
+    return (
+      <span className="text-[11px] font-medium text-cyan-800 whitespace-nowrap">
+        In Production
+      </span>
+    );
+  }
+
+  if (rec.lifecycleStage === 'Order Closed') {
+    return <span className="text-[11px] text-slate-400 whitespace-nowrap">Closed</span>;
+  }
+
+  if (rec.estimatedOutputStatus === 'awaiting_running_end_date') {
+    return (
+      <span className="text-[11px] text-amber-700/90 whitespace-nowrap">
+        Awaiting Running Style End Date
+      </span>
+    );
+  }
+
+  return <span className="text-[11px] text-slate-400 whitespace-nowrap">Queued (Next Up pending)</span>;
 }
 
 export function PublicFactoryPlanTable({
@@ -256,16 +362,21 @@ export function PublicFactoryPlanTable({
               </div>
 
               <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full min-w-[1360px] text-left border-collapse">
                   <thead className="sticky top-0 z-10 bg-slate-900 text-white">
                     <tr className="text-[11px] font-semibold tracking-wide">
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Lifecycle</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">PG #</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Style / Description</th>
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Planned Qty</th>
+                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Cutting Input Qty</th>
+                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Cutting Output Qty</th>
+                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Packing Qty</th>
+                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Balance to Pack</th>
+                      <th className="py-2.5 px-3.5 whitespace-nowrap">Packing Status</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">End Date</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Trigger (End-10D)</th>
-                      <th className="py-2.5 px-3.5 whitespace-nowrap">Output Start</th>
+                      <th className="py-2.5 px-3.5 whitespace-nowrap">Est. Output Start (Run+1D)</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Order Status</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Plan Readiness</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Risk Status</th>
@@ -289,7 +400,7 @@ export function PublicFactoryPlanTable({
                         <td className="py-2.5 px-3.5 font-mono font-semibold text-slate-900 whitespace-nowrap">
                           {rec.pgNumber}
                         </td>
-                        <td className="py-2.5 px-3.5 min-w-[220px] max-w-[320px]">
+                        <td className="py-2.5 px-3.5 min-w-[210px] max-w-[300px]">
                           <div className="font-medium text-slate-900 leading-snug">
                             {rec.style}
                           </div>
@@ -310,14 +421,60 @@ export function PublicFactoryPlanTable({
                             {rec.plannedQty !== null ? rec.plannedQty.toLocaleString() : '—'}
                           </span>
                         </td>
-                        <td className="py-2.5 px-3.5 font-mono tabular-nums text-slate-800 whitespace-nowrap">
-                          {formatDisplayDate(rec.endDateIso)}
+                        <td
+                          className="py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap text-slate-700"
+                          title={
+                            rec.cuttingInputQty === null
+                              ? 'Cutting Input column not available in online cutting sheet'
+                              : undefined
+                          }
+                        >
+                          {rec.cuttingInputQty !== null ? (
+                            rec.cuttingInputQty.toLocaleString()
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
+                          {rec.cuttingOutputQty.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap">
+                          {rec.packingQty !== null ? (
+                            <span className="font-semibold text-teal-800">
+                              {rec.packingQty.toLocaleString()}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-sans text-slate-400">Not set</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap">
+                          {rec.balanceToPack !== null ? (
+                            <span
+                              className={`font-semibold ${
+                                rec.balanceToPack < 0
+                                  ? 'text-red-700'
+                                  : rec.balanceToPack === 0
+                                    ? 'text-emerald-700'
+                                    : 'text-slate-800'
+                              }`}
+                            >
+                              {rec.balanceToPack.toLocaleString()}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3.5 whitespace-nowrap">
+                          {renderPackingStatusBadge(rec.packingStatus)}
+                        </td>
+                        <td className="py-2.5 px-3.5 whitespace-nowrap">
+                          {renderEndDateCell(rec.endDateIso)}
                         </td>
                         <td className="py-2.5 px-3.5 font-mono tabular-nums font-medium text-slate-900 whitespace-nowrap">
                           {formatDisplayDate(rec.triggerDateIso)}
                         </td>
-                        <td className="py-2.5 px-3.5 font-mono tabular-nums text-slate-700 whitespace-nowrap">
-                          {formatDisplayDate(rec.newStyleOutputStartIso)}
+                        <td className="py-2.5 px-3.5 whitespace-nowrap">
+                          {renderEstimatedOutputStartCell(rec)}
                         </td>
                         <td className="py-2.5 px-3.5 whitespace-nowrap">
                           <span
@@ -353,7 +510,7 @@ export function PublicFactoryPlanTable({
       ) : (
         <div className="ct-surface rounded-2xl overflow-hidden">
           <div className="overflow-x-auto max-h-[68vh] overflow-y-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full min-w-[1460px] text-left border-collapse">
               <thead className="sticky top-0 z-10 bg-slate-900 text-white">
                 <tr className="text-[11px] font-semibold tracking-wide">
                   <th className="py-3 px-3.5 whitespace-nowrap">Line · Zone</th>
@@ -362,9 +519,14 @@ export function PublicFactoryPlanTable({
                   <th className="py-3 px-3 whitespace-nowrap">PG #</th>
                   <th className="py-3 px-3 whitespace-nowrap">Style / Description</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Planned Qty</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Cutting Input Qty</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Cutting Output Qty</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Packing Qty</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Balance to Pack</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Packing Status</th>
                   <th className="py-3 px-3 whitespace-nowrap">End Date</th>
                   <th className="py-3 px-3 whitespace-nowrap">Trigger Date</th>
-                  <th className="py-3 px-3 whitespace-nowrap">Output Start</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Est. Output Start (Run+1D)</th>
                   <th className="py-3 px-3 whitespace-nowrap">Order Status</th>
                   <th className="py-3 px-3 whitespace-nowrap">Plan Readiness</th>
                   <th className="py-3 px-3 whitespace-nowrap">Risk Status</th>
@@ -416,14 +578,60 @@ export function PublicFactoryPlanTable({
                         {rec.plannedQty !== null ? rec.plannedQty.toLocaleString() : '—'}
                       </span>
                     </td>
-                    <td className="py-2.5 px-3 font-mono tabular-nums text-slate-800 whitespace-nowrap">
-                      {formatDisplayDate(rec.endDateIso)}
+                    <td
+                      className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap text-slate-700"
+                      title={
+                        rec.cuttingInputQty === null
+                          ? 'Cutting Input column not available in online cutting sheet'
+                          : undefined
+                      }
+                    >
+                      {rec.cuttingInputQty !== null ? (
+                        rec.cuttingInputQty.toLocaleString()
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
+                      {rec.cuttingOutputQty.toLocaleString()}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                      {rec.packingQty !== null ? (
+                        <span className="font-semibold text-teal-800">
+                          {rec.packingQty.toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-sans text-slate-400">Not set</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                      {rec.balanceToPack !== null ? (
+                        <span
+                          className={`font-semibold ${
+                            rec.balanceToPack < 0
+                              ? 'text-red-700'
+                              : rec.balanceToPack === 0
+                                ? 'text-emerald-700'
+                                : 'text-slate-800'
+                          }`}
+                        >
+                          {rec.balanceToPack.toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 whitespace-nowrap">
+                      {renderPackingStatusBadge(rec.packingStatus)}
+                    </td>
+                    <td className="py-2.5 px-3 whitespace-nowrap">
+                      {renderEndDateCell(rec.endDateIso)}
                     </td>
                     <td className="py-2.5 px-3 font-mono tabular-nums font-medium text-slate-900 whitespace-nowrap">
                       {formatDisplayDate(rec.triggerDateIso)}
                     </td>
-                    <td className="py-2.5 px-3 font-mono tabular-nums text-slate-700 whitespace-nowrap">
-                      {formatDisplayDate(rec.newStyleOutputStartIso)}
+                    <td className="py-2.5 px-3 whitespace-nowrap">
+                      {renderEstimatedOutputStartCell(rec)}
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       <span

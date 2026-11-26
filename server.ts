@@ -37,6 +37,7 @@ import {
   bootstrapInitialAdminPassword,
   deleteReminderRecipient,
   getAdminAuthUpdatedAtIso,
+  getPublicFoNeededState,
   getPublicMasterPlanState,
   getPublicWorkspaceState,
   getSiteConfig,
@@ -49,6 +50,7 @@ import {
   updateAdminPassword,
   updateCuttingSheetSyncConfig,
   updatePlanningWorkspace,
+  updateRecordsPackingQty,
   updateReminderRecipient,
   updateReminderSchedule,
   updateSiteConfig,
@@ -289,6 +291,7 @@ async function startServer() {
   );
 
   app.get('/api/health', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
     const state = getWorkspaceState();
     res.json({
       ok: true,
@@ -331,6 +334,91 @@ async function startServer() {
     } catch (error) {
       console.error('GET /api/public/master-plan error:', error);
       res.status(500).json({ error: 'Failed to load public master plan.' });
+    }
+  });
+
+  // Strict read-only public endpoint for Master Plan FO NEEDED tab
+  app.get('/api/public/fo-needed', (req, res) => {
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      const state = getWorkspaceState();
+      const factories =
+        Array.isArray(state.meta.factoriesIncluded) && state.meta.factoriesIncluded.length > 0
+          ? state.meta.factoriesIncluded
+          : ALLOWED_FACTORIES;
+
+      const rawFactory = typeof req.query.factory === 'string' ? req.query.factory.trim() : '';
+      if (rawFactory && rawFactory.toUpperCase() !== 'ALL') {
+        const normalized = rawFactory.replace(/\s+/g, ' ').toUpperCase();
+        const matched = factories.find((f) => f.toUpperCase() === normalized);
+        if (!matched) {
+          res.status(400).json({ error: 'Invalid factory filter.' });
+          return;
+        }
+        res.json(getPublicFoNeededState(matched));
+        return;
+      }
+
+      res.json(getPublicFoNeededState(null));
+    } catch (error) {
+      console.error('GET /api/public/fo-needed error:', error);
+      res.status(500).json({ error: 'Failed to load public FO Needed checklist.' });
+    }
+  });
+
+  // Read-only Excel export matching Control Tower's Selected FO Needed Checklist
+  app.get('/api/public/export-selected-fo-xlsx', async (req, res) => {
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      const state = getWorkspaceState();
+      const factories =
+        Array.isArray(state.meta.factoriesIncluded) && state.meta.factoriesIncluded.length > 0
+          ? state.meta.factoriesIncluded
+          : ALLOWED_FACTORIES;
+
+      const rawFactory = typeof req.query.factory === 'string' ? req.query.factory.trim() : '';
+      let factoryFilter: FactoryName | null = null;
+      if (rawFactory && rawFactory.toUpperCase() !== 'ALL') {
+        const normalized = rawFactory.replace(/\s+/g, ' ').toUpperCase();
+        const matched = factories.find((f) => f.toUpperCase() === normalized);
+        if (!matched) {
+          res.status(400).json({ error: 'Invalid factory filter.' });
+          return;
+        }
+        factoryFilter = matched;
+      }
+
+      const foData = getPublicFoNeededState(factoryFilter);
+      const summaryRows: SelectedFoSummaryBoxRow[] = foData.rows.map((r) => ({
+        sl: r.sl,
+        factory: r.factory,
+        line: r.line,
+        pgNumber: r.pgNumber,
+        style: r.style,
+        issueQty: r.issueQty,
+        status: r.status,
+        foDateNeededIso: r.foDateNeededIso,
+        foStatus: r.foStatus,
+      }));
+
+      const buffer = await buildSelectedFoSummaryBoxWorkbookBuffer({
+        masterPlanAsOf: foData.meta.asOfDateRaw || foData.meta.asOfDateIso || '—',
+        referenceDateIso: foData.referenceDateIso,
+        rows: summaryRows,
+      });
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="ALEX_FO_Needed_Checklist_${foData.referenceDateIso}.xlsx"`
+      );
+      res.send(buffer);
+    } catch (error) {
+      console.error('GET /api/public/export-selected-fo-xlsx error:', error);
+      res.status(500).json({ error: 'Failed to export FO Needed Excel file.' });
     }
   });
 
@@ -432,6 +520,85 @@ async function startServer() {
     } catch (error) {
       console.error('POST /api/workspace/reset error:', error);
       res.status(500).json({ error: toSafeClientError(error, 'Failed to reset workspace.') });
+    }
+  });
+
+  // Admin-only Packing Qty update endpoints (never writable by public visitors)
+  const parsePackingQtyInput = (raw: unknown): { valid: boolean; value: number | null } => {
+    if (raw === null || raw === undefined || raw === '') {
+      return { valid: true, value: null };
+    }
+    const num = typeof raw === 'number' ? raw : Number(String(raw).trim());
+    if (!Number.isFinite(num) || num < 0 || num > 10_000_000) {
+      return { valid: false, value: null };
+    }
+    return { valid: true, value: Math.round(num) };
+  };
+
+  app.patch('/api/records/:id/packing', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { id } = req.params;
+      if (!id || typeof id !== 'string') {
+        res.status(400).json({ error: 'Valid record id is required.' });
+        return;
+      }
+      const parsed = parsePackingQtyInput((req.body as { packingQty?: unknown })?.packingQty);
+      if (!parsed.valid) {
+        res.status(400).json({
+          error: 'Packing Qty must be blank or a non-negative integer up to 10,000,000.',
+        });
+        return;
+      }
+      const result = updateRecordsPackingQty([id], parsed.value);
+      if (result.updatedCount === 0) {
+        res.status(404).json({ error: 'Planning record not found.' });
+        return;
+      }
+      res.json({
+        ok: true,
+        updatedCount: result.updatedCount,
+        updatedAtIso: result.updatedAtIso,
+        packingQty: parsed.value,
+      });
+    } catch (error) {
+      console.error('PATCH /api/records/:id/packing error:', error);
+      res.status(500).json({ error: toSafeClientError(error, 'Failed to save Packing Qty.') });
+    }
+  });
+
+  app.patch('/api/packing', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const body = (req.body || {}) as { recordIds?: unknown; packingQty?: unknown };
+      const recordIds = Array.isArray(body.recordIds)
+        ? body.recordIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).slice(0, 100)
+        : [];
+      if (recordIds.length === 0) {
+        res.status(400).json({ error: 'Provide at least one planning record ID.' });
+        return;
+      }
+      const parsed = parsePackingQtyInput(body.packingQty);
+      if (!parsed.valid) {
+        res.status(400).json({
+          error: 'Packing Qty must be blank or a non-negative integer up to 10,000,000.',
+        });
+        return;
+      }
+      const result = updateRecordsPackingQty(recordIds, parsed.value);
+      if (result.updatedCount === 0) {
+        res.status(404).json({ error: 'Matching planning records not found.' });
+        return;
+      }
+      res.json({
+        ok: true,
+        updatedCount: result.updatedCount,
+        updatedAtIso: result.updatedAtIso,
+        packingQty: parsed.value,
+      });
+    } catch (error) {
+      console.error('PATCH /api/packing error:', error);
+      res.status(500).json({ error: toSafeClientError(error, 'Failed to update Packing Qty.') });
     }
   });
 

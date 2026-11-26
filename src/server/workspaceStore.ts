@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   ALLOWED_FACTORIES,
+  buildSelectedFoSummaryRows,
   evaluatePlanningRecords,
   parseMasterPlanCsv,
 } from '../shared/plannerTypes.ts';
@@ -13,6 +14,7 @@ import type {
   MasterPlanMeta,
   OrderStatus,
   PlanningRecord,
+  PublicFoNeededResponse,
   PublicMasterPlanRecord,
   PublicMasterPlanResponse,
 } from '../shared/plannerTypes.ts';
@@ -108,11 +110,29 @@ function normalizeRecords(records: PlanningRecord[]): PlanningRecord[] {
   return records.map((r) => {
     const orderStatus = (r.orderStatus ?? (r.isFinished ? 'Order Closed' : 'Open')) as OrderStatus;
     const isClosed = orderStatus === 'Order Closed' || Boolean(r.isFinished);
+    const cuttingInputQty =
+      r.cuttingInputQty !== null &&
+      r.cuttingInputQty !== undefined &&
+      Number.isFinite(r.cuttingInputQty) &&
+      r.cuttingInputQty >= 0
+        ? Math.round(r.cuttingInputQty)
+        : null;
+    const packingQty =
+      r.packingQty !== null &&
+      r.packingQty !== undefined &&
+      Number.isFinite(r.packingQty) &&
+      r.packingQty >= 0
+        ? Math.round(r.packingQty)
+        : null;
     return {
       ...r,
       orderStatus,
       isFinished: isClosed,
       isManualRunning: isClosed ? false : Boolean(r.isManualRunning),
+      cuttingInputQty,
+      packingQty,
+      packingUpdatedAtIso:
+        typeof r.packingUpdatedAtIso === 'string' ? r.packingUpdatedAtIso : null,
       foChecklistConfirmed: Boolean(r.foChecklistConfirmed),
       foChecklistConfirmedAtIso:
         typeof r.foChecklistConfirmedAtIso === 'string' ? r.foChecklistConfirmedAtIso : null,
@@ -364,12 +384,26 @@ export function getPublicMasterPlanState(factoryFilter?: FactoryName): PublicMas
     endDateIso: rec.endDateIso,
     triggerDateIso: rec.triggerDateIso,
     newStyleOutputStartIso: rec.newStyleOutputStartIso,
+    estimatedOutputStartIso: rec.estimatedOutputStartIso,
+    estimatedOutputStatus: rec.estimatedOutputStatus,
+    precedingRunningPgNumber: rec.precedingRunningPgNumber,
+    precedingRunningEndDateIso: rec.precedingRunningEndDateIso,
+    cuttingInputQty: rec.cuttingInputQty,
+    cuttingOutputQty: rec.cuttingOutputQty,
+    packingQty: rec.packingQty,
+    balanceToPack: rec.balanceToPack,
+    packingStatus: rec.packingStatus,
+    packingUpdatedAtIso: rec.packingUpdatedAtIso ?? null,
     estimatedCuttingFinishIso: rec.estimatedCuttingFinishIso,
     lifecycleStage: rec.lifecycleStage,
     actionMessage: rec.actionMessage,
     riskStatus: rec.riskStatus,
     riskTier: rec.riskTier,
   }));
+
+  const hasCuttingData = sanitizedRecords.some((r) => r.cuttingOutputQty > 0);
+  const hasCuttingInputColumn = sanitizedRecords.some((r) => r.cuttingInputQty !== null);
+  const hasPackingData = sanitizedRecords.some((r) => r.packingQty !== null);
 
   return {
     meta: {
@@ -384,6 +418,48 @@ export function getPublicMasterPlanState(factoryFilter?: FactoryName): PublicMas
     records: sanitizedRecords,
     referenceDateIso: state.referenceDateIso,
     updatedAtIso: state.updatedAtIso,
+    cuttingSheetSummary: {
+      hasCuttingData,
+      hasCuttingInputColumn,
+      hasPackingData,
+      lastSyncedAtIso: state.cuttingSheetSync?.lastUpdatedAtIso ?? null,
+    },
+    branding: {
+      companyName: state.siteConfig.companyName,
+      portalTitle: state.siteConfig.portalTitle,
+    },
+  };
+}
+
+export function getPublicFoNeededState(
+  factoryFilter?: FactoryName | null
+): PublicFoNeededResponse {
+  const state = getWorkspaceState();
+  const { rows, totalIssueQty, uniquePgIssueQty } = buildSelectedFoSummaryRows({
+    records: state.records,
+    cuttingEntries: state.cuttingEntries,
+    referenceDateIso: state.referenceDateIso,
+    ruleOptions: {
+      inputStartOffsetDays: state.siteConfig.inputStartOffsetDays,
+      upcomingFoOffsetDays: state.siteConfig.upcomingFoOffsetDays,
+      cuttingAlertDays: state.siteConfig.cuttingAlertDays,
+    },
+    factoryFilter: factoryFilter ?? null,
+  });
+
+  return {
+    meta: {
+      title: state.meta.title,
+      asOfDateRaw: state.meta.asOfDateRaw,
+      asOfDateIso: state.meta.asOfDateIso,
+      factoriesIncluded: [...state.meta.factoriesIncluded],
+    },
+    referenceDateIso: state.referenceDateIso,
+    updatedAtIso: state.updatedAtIso,
+    selectedCount: rows.length,
+    totalIssueQty,
+    uniquePgIssueQty,
+    rows,
     branding: {
       companyName: state.siteConfig.companyName,
       portalTitle: state.siteConfig.portalTitle,
@@ -637,10 +713,52 @@ export function updateCuttingSheetSyncConfig(
   return nextSync;
 }
 
+export function updateRecordsPackingQty(
+  recordIds: string[],
+  packingQty: number | null
+): { updatedCount: number; updatedAtIso: string; records: PlanningRecord[] } {
+  const current = getWorkspaceState();
+  const idSet = new Set(recordIds);
+  const nowIso = new Date().toISOString();
+  const sanitizedQty =
+    packingQty !== null && Number.isFinite(packingQty) && packingQty >= 0
+      ? Math.round(packingQty)
+      : null;
+
+  let updatedCount = 0;
+  const nextRecords = current.records.map((rec) => {
+    if (!idSet.has(rec.id)) return rec;
+    updatedCount += 1;
+    return {
+      ...rec,
+      packingQty: sanitizedQty,
+      packingUpdatedAtIso: sanitizedQty !== null ? nowIso : null,
+    };
+  });
+
+  if (updatedCount > 0) {
+    cachedState = {
+      ...current,
+      records: nextRecords,
+      hasCustomEdits: true,
+      updatedAtIso: nowIso,
+    };
+    writeStateToDisk(cachedState);
+  }
+
+  return {
+    updatedCount,
+    updatedAtIso: cachedState?.updatedAtIso ?? nowIso,
+    records: nextRecords,
+  };
+}
+
 export interface RecordSheetPatch {
   recordIds: string[];
   plannedQty?: number | null;
   dailyTargetQty?: number | null;
+  cuttingInputQty?: number | null;
+  packingQty?: number | null;
   sheetRemark?: string;
   foFullQtyReleased?: boolean;
 }
@@ -664,6 +782,8 @@ export function applySyncedCuttingEntries(params: {
       {
         plannedQty?: number | null;
         dailyTargetQty?: number | null;
+        cuttingInputQty?: number | null;
+        packingQty?: number | null;
         sheetRemark?: string;
         foFullQtyReleased?: boolean;
       }
@@ -684,12 +804,21 @@ export function applySyncedCuttingEntries(params: {
             upd.dailyTargetQty !== undefined && upd.dailyTargetQty !== null
               ? upd.dailyTargetQty
               : prev.dailyTargetQty,
+          cuttingInputQty:
+            upd.cuttingInputQty !== undefined && upd.cuttingInputQty !== null
+              ? upd.cuttingInputQty
+              : prev.cuttingInputQty,
+          packingQty:
+            upd.packingQty !== undefined && upd.packingQty !== null
+              ? upd.packingQty
+              : prev.packingQty,
           sheetRemark: mergedRemark,
           foFullQtyReleased: Boolean(prev.foFullQtyReleased || upd.foFullQtyReleased),
         });
       }
     }
     if (patchByRecordId.size > 0) {
+      const nowIso = new Date().toISOString();
       nextRecords = current.records.map((rec) => {
         const upd = patchByRecordId.get(rec.id);
         if (!upd) return rec;
@@ -699,6 +828,18 @@ export function applySyncedCuttingEntries(params: {
           upd.dailyTargetQty !== undefined && upd.dailyTargetQty !== null
             ? upd.dailyTargetQty
             : rec.dailyTargetQty;
+        const nextCuttingInput =
+          upd.cuttingInputQty !== undefined && upd.cuttingInputQty !== null
+            ? upd.cuttingInputQty
+            : (rec.cuttingInputQty ?? null);
+        const nextPackingQty =
+          upd.packingQty !== undefined && upd.packingQty !== null
+            ? upd.packingQty
+            : (rec.packingQty ?? null);
+        const nextPackingUpdatedAt =
+          upd.packingQty !== undefined && upd.packingQty !== null
+            ? nowIso
+            : (rec.packingUpdatedAtIso ?? null);
         const nextRemark =
           upd.sheetRemark !== undefined && upd.sheetRemark.trim()
             ? upd.sheetRemark.trim()
@@ -714,6 +855,8 @@ export function applySyncedCuttingEntries(params: {
         if (
           nextPlanned === rec.plannedQty &&
           nextTarget === rec.dailyTargetQty &&
+          nextCuttingInput === (rec.cuttingInputQty ?? null) &&
+          nextPackingQty === (rec.packingQty ?? null) &&
           nextRemark === (rec.sheetRemark || '') &&
           nextReleased === Boolean(rec.foFullQtyReleased) &&
           nextFoStatus === rec.foStatus &&
@@ -727,6 +870,9 @@ export function applySyncedCuttingEntries(params: {
           plannedQty: nextPlanned,
           foIssueQty: nextIssueQty,
           dailyTargetQty: nextTarget,
+          cuttingInputQty: nextCuttingInput,
+          packingQty: nextPackingQty,
+          packingUpdatedAtIso: nextPackingUpdatedAt,
           sheetRemark: nextRemark,
           foFullQtyReleased: nextReleased,
           foStatus: nextFoStatus,

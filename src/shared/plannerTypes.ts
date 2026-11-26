@@ -8,6 +8,10 @@ export type StyleClassification = 'Confirmed Style' | 'Booked Allocation' | 'Ope
 
 export type LineLifecycleStage = 'Order Closed' | 'Running' | 'Upcoming (Next)' | 'Queued';
 
+export type PackingStatus = 'Not Started' | 'In Progress' | 'Completed' | 'Over Packed';
+
+export type EstimatedOutputStatus = 'available' | 'awaiting_running_end_date' | 'not_applicable';
+
 export interface PlanningRecord {
   id: string;
   factory: FactoryName;
@@ -28,6 +32,9 @@ export interface PlanningRecord {
   plannedQty: number | null; // Order Qty / Planned Qty
   foIssueQty: number | null; // Fabric Order Issue Qty
   cuttingBaseQty: number | null; // Optional opening cutting qty before daily log
+  cuttingInputQty?: number | null; // Synced from online cutting sheet when a distinct input column exists
+  packingQty?: number | null; // Synced from online sheet if present, or Admin-entered in Control Tower
+  packingUpdatedAtIso?: string | null;
   dailyTargetQty: number | null; // Daily cutting target qty
   endDateRaw: string;
   endDateIso: string | null;
@@ -64,6 +71,15 @@ export interface EvaluatedPlanningRecord extends PlanningRecord {
   isFullQtyReleased: boolean;
   newStyleOutputStartIso: string | null;
   daysToNewStyleOutputStart: number | null;
+  estimatedOutputStartIso: string | null;
+  estimatedOutputStatus: EstimatedOutputStatus;
+  precedingRunningPgNumber: string | null;
+  precedingRunningEndDateIso: string | null;
+  cuttingInputQty: number | null;
+  cuttingOutputQty: number;
+  packingQty: number | null;
+  balanceToPack: number | null;
+  packingStatus: PackingStatus;
   cuttingFinishedQty: number;
   cuttingRemainingQty: number | null;
   cuttingDaysRemaining: number | null;
@@ -173,6 +189,16 @@ export interface PublicMasterPlanRecord {
   endDateIso: string | null;
   triggerDateIso: string | null;
   newStyleOutputStartIso: string | null;
+  estimatedOutputStartIso: string | null;
+  estimatedOutputStatus: EstimatedOutputStatus;
+  precedingRunningPgNumber: string | null;
+  precedingRunningEndDateIso: string | null;
+  cuttingInputQty: number | null;
+  cuttingOutputQty: number;
+  packingQty: number | null;
+  balanceToPack: number | null;
+  packingStatus: PackingStatus;
+  packingUpdatedAtIso: string | null;
   estimatedCuttingFinishIso: string | null;
   lifecycleStage: LineLifecycleStage;
   actionMessage: string;
@@ -186,6 +212,46 @@ export interface PublicMasterPlanResponse {
   records: PublicMasterPlanRecord[];
   referenceDateIso: string;
   updatedAtIso: string;
+  cuttingSheetSummary?: {
+    hasCuttingData: boolean;
+    hasCuttingInputColumn: boolean;
+    hasPackingData: boolean;
+    lastSyncedAtIso: string | null;
+  };
+  branding: {
+    companyName: string;
+    portalTitle: string;
+  };
+}
+
+export interface PublicFoNeededRow {
+  sl: number;
+  recordId: string;
+  factory: FactoryName;
+  line: string;
+  pgNumber: string;
+  style: string;
+  issueQty: number | null;
+  status: 'Running' | 'Upcoming';
+  foDateNeededIso: string | null;
+  foStatus: 'Pending' | 'Under Process' | 'Completed';
+  isFullQtyReleased: boolean;
+  rawFoStatus: FoStatus;
+}
+
+export interface PublicFoNeededResponse {
+  meta: {
+    title: string;
+    asOfDateRaw: string;
+    asOfDateIso: string;
+    factoriesIncluded: FactoryName[];
+  };
+  referenceDateIso: string;
+  updatedAtIso: string;
+  selectedCount: number;
+  totalIssueQty: number;
+  uniquePgIssueQty: number;
+  rows: PublicFoNeededRow[];
   branding: {
     companyName: string;
     portalTitle: string;
@@ -716,6 +782,47 @@ export interface PlanningRuleOptions {
   cuttingAlertDays?: number;
 }
 
+export function computePackingSummary(
+  cuttingOutputQty: number,
+  rawPackingQty: number | null | undefined
+): {
+  packingQty: number | null;
+  balanceToPack: number | null;
+  packingStatus: PackingStatus;
+} {
+  const safeCut =
+    Number.isFinite(cuttingOutputQty) && cuttingOutputQty > 0
+      ? Math.round(cuttingOutputQty)
+      : 0;
+  const hasEntry =
+    rawPackingQty !== null &&
+    rawPackingQty !== undefined &&
+    Number.isFinite(rawPackingQty) &&
+    rawPackingQty >= 0;
+  const packingQty = hasEntry ? Math.round(rawPackingQty) : null;
+  const effectivePack = packingQty ?? 0;
+
+  let packingStatus: PackingStatus = 'Not Started';
+  if (effectivePack === 0) {
+    packingStatus = 'Not Started';
+  } else if (effectivePack > safeCut) {
+    packingStatus = 'Over Packed';
+  } else if (safeCut > 0 && effectivePack === safeCut) {
+    packingStatus = 'Completed';
+  } else {
+    packingStatus = 'In Progress';
+  }
+
+  const balanceToPack =
+    safeCut > 0 || packingQty !== null ? safeCut - effectivePack : null;
+
+  return {
+    packingQty,
+    balanceToPack,
+    packingStatus,
+  };
+}
+
 export function evaluatePlanningRecords(
   records: PlanningRecord[],
   cuttingEntries: DailyCuttingEntry[],
@@ -742,6 +849,14 @@ export function evaluatePlanningRecords(
   const pgSheetTotals = buildPgSheetCuttingTotalsMap(cuttingEntries);
   const lifecycleMap = computeLineLifecycleMap(records);
 
+  // Scope Running Style strictly by Factory + Production Line for Upcoming Output estimation
+  const runningRecordByLineKey = new Map<string, PlanningRecord>();
+  for (const rec of records) {
+    if (lifecycleMap.get(rec.id) === 'Running') {
+      runningRecordByLineKey.set(`${rec.factory}::${rec.line}`, rec);
+    }
+  }
+
   return records.map((record) => {
     const lifecycleStage = lifecycleMap.get(record.id) ?? 'Queued';
     const isCurrentStyle = lifecycleStage === 'Running';
@@ -758,9 +873,29 @@ export function evaluatePlanningRecords(
         detectFullQtyReleasedFromText(record.sheetRemark || '') ||
         detectFullQtyReleasedFromText(record.fabricNote || ''));
 
-    // New Style Output starts 1 day after order end date (e.g., running ends 25 Nov -> output starts 26 Nov)
+    // Preserve slot-level end+1 date for Control Tower filters
     const newStyleOutputStartIso = addDaysIso(record.endDateIso, 1);
     const daysToNewStyleOutputStart = diffDaysIso(newStyleOutputStartIso, referenceDateIso);
+
+    // Master Plan Estimated Output Date: Preceding Running Style End Date + 1 Day (strictly Factory + Line scoped)
+    const lineRunningRec = runningRecordByLineKey.get(`${record.factory}::${record.line}`) ?? null;
+    const precedingRunningPgNumber = lineRunningRec?.pgNumber ?? null;
+    const precedingRunningEndDateIso = lineRunningRec?.endDateIso ?? null;
+
+    let estimatedOutputStartIso: string | null = null;
+    let estimatedOutputStatus: EstimatedOutputStatus = 'not_applicable';
+    if (lifecycleStage === 'Upcoming (Next)') {
+      if (precedingRunningEndDateIso) {
+        estimatedOutputStartIso = addDaysIso(precedingRunningEndDateIso, 1);
+        estimatedOutputStatus = 'available';
+      } else {
+        estimatedOutputStartIso = null;
+        estimatedOutputStatus = 'awaiting_running_end_date';
+      }
+    } else if (lifecycleStage === 'Queued' && !precedingRunningEndDateIso) {
+      estimatedOutputStartIso = null;
+      estimatedOutputStatus = 'awaiting_running_end_date';
+    }
 
     const directManual = directManualTotals.get(record.id) ?? 0;
     const directSheet = directSheetTotals.get(record.id) ?? 0;
@@ -772,6 +907,18 @@ export function evaluatePlanningRecords(
     const effectiveSheet = directSheet > 0 ? directSheet : pgSheet;
 
     const cuttingFinishedQty = (record.cuttingBaseQty ?? 0) + directManual + effectiveSheet;
+    const cuttingInputQty =
+      record.cuttingInputQty !== null &&
+      record.cuttingInputQty !== undefined &&
+      Number.isFinite(record.cuttingInputQty) &&
+      record.cuttingInputQty >= 0
+        ? Math.round(record.cuttingInputQty)
+        : null;
+    const cuttingOutputQty = cuttingFinishedQty;
+    const { packingQty, balanceToPack, packingStatus } = computePackingSummary(
+      cuttingOutputQty,
+      record.packingQty
+    );
 
     let cuttingRemainingQty: number | null = null;
     let cuttingDaysRemaining: number | null = null;
@@ -806,6 +953,15 @@ export function evaluatePlanningRecords(
       isFullQtyReleased,
       newStyleOutputStartIso,
       daysToNewStyleOutputStart,
+      estimatedOutputStartIso,
+      estimatedOutputStatus,
+      precedingRunningPgNumber,
+      precedingRunningEndDateIso,
+      cuttingInputQty,
+      cuttingOutputQty,
+      packingQty,
+      balanceToPack,
+      packingStatus,
       cuttingFinishedQty,
       cuttingRemainingQty,
       cuttingDaysRemaining,
@@ -1459,3 +1615,130 @@ export function computePgWiseQtySummary(pgItems: PgFoChecklistItem[]): PgWiseQty
     byFactory,
   };
 }
+
+export function getCompactSummaryFoStatus(
+  rec: Pick<EvaluatedPlanningRecord, 'isFullQtyReleased' | 'foStatus'>
+): 'Pending' | 'Under Process' | 'Completed' {
+  if (rec.isFullQtyReleased || rec.foStatus === 'In-House') {
+    return 'Completed';
+  }
+  if (rec.foStatus === 'FO Raised') {
+    return 'Under Process';
+  }
+  return 'Pending';
+}
+
+export function buildSelectedFoSummaryRows(params: {
+  records: PlanningRecord[];
+  cuttingEntries: DailyCuttingEntry[];
+  referenceDateIso: string;
+  ruleOptions?: PlanningRuleOptions;
+  factoryFilter?: FactoryName | null;
+}): {
+  rows: PublicFoNeededRow[];
+  totalIssueQty: number;
+  uniquePgIssueQty: number;
+} {
+  const { records, cuttingEntries, referenceDateIso, ruleOptions = {}, factoryFilter = null } = params;
+  const inputStartOffsetDays = Math.max(1, ruleOptions.inputStartOffsetDays ?? 10);
+  const upcomingFoOffsetDays = Math.max(1, ruleOptions.upcomingFoOffsetDays ?? 15);
+
+  const evaluated = evaluatePlanningRecords(records, cuttingEntries, referenceDateIso, ruleOptions);
+  const shortcuts = buildLineShortcutSummaries(evaluated, referenceDateIso, ruleOptions);
+  const shortcutByLineKey = new Map<string, LineShortcutSummary>();
+  for (const s of shortcuts) {
+    shortcutByLineKey.set(`${s.factory}::${s.line}`, s);
+  }
+
+  const selectedRecords = evaluated.filter((rec) => {
+    if (!rec.upcomingFoSelected) return false;
+    if (factoryFilter && rec.factory !== factoryFilter) return false;
+    return true;
+  });
+
+  const enriched = selectedRecords
+    .map((rec) => {
+      const sc = shortcutByLineKey.get(`${rec.factory}::${rec.line}`) ?? null;
+      const isLineUpcoming = sc?.upcomingRecord?.id === rec.id;
+      const inputStartIso = isLineUpcoming
+        ? sc?.newStyleInputStartIso ?? null
+        : rec.endDateIso
+          ? addDaysIso(rec.endDateIso, -inputStartOffsetDays)
+          : null;
+      const foDateNeededIso = isLineUpcoming
+        ? sc?.upcomingFoTriggerIso ?? null
+        : inputStartIso
+          ? addDaysIso(inputStartIso, -upcomingFoOffsetDays)
+          : rec.triggerDateIso;
+      const issueQty = getEffectiveIssueQty(rec);
+      const severity: 'critical' | 'warning' | 'upcoming' | 'normal' = rec.isFullQtyReleased
+        ? 'normal'
+        : isLineUpcoming
+          ? sc?.summarySeverity ?? 'upcoming'
+          : rec.riskTier === 'critical'
+            ? 'critical'
+            : rec.riskTier === 'high' || rec.riskTier === 'plan_qty_pending'
+              ? 'warning'
+              : rec.riskTier === 'monitoring'
+                ? 'upcoming'
+                : 'normal';
+
+      return {
+        rec,
+        foDateNeededIso,
+        issueQty,
+        severity,
+      };
+    })
+    .sort((a, b) => {
+      const sevOrder = { critical: 0, warning: 1, upcoming: 2, normal: 3 };
+      if (sevOrder[a.severity] !== sevOrder[b.severity]) {
+        return sevOrder[a.severity] - sevOrder[b.severity];
+      }
+      return (a.foDateNeededIso || '9999-12-31').localeCompare(
+        b.foDateNeededIso || '9999-12-31'
+      );
+    });
+
+  const pgIssueMap = new Map<string, number>();
+  let totalIssueQty = 0;
+
+  const rows: PublicFoNeededRow[] = enriched.map((item, idx) => {
+    const rec = item.rec;
+    if (item.issueQty !== null) {
+      totalIssueQty += item.issueQty;
+    }
+    const pgKey = `${rec.factory}::${
+      rec.pgNumber && rec.pgNumber !== '—' ? rec.pgNumber.toUpperCase() : rec.id
+    }`;
+    const effQty = item.issueQty ?? rec.plannedQty ?? 0;
+    pgIssueMap.set(pgKey, Math.max(pgIssueMap.get(pgKey) ?? 0, effQty));
+
+    return {
+      sl: idx + 1,
+      recordId: rec.id,
+      factory: rec.factory,
+      line: rec.line,
+      pgNumber: rec.pgNumber,
+      style: rec.style,
+      issueQty: item.issueQty,
+      status: rec.lifecycleStage === 'Running' ? 'Running' : 'Upcoming',
+      foDateNeededIso: item.foDateNeededIso,
+      foStatus: getCompactSummaryFoStatus(rec),
+      isFullQtyReleased: rec.isFullQtyReleased,
+      rawFoStatus: rec.foStatus,
+    };
+  });
+
+  let uniquePgIssueQty = 0;
+  for (const v of pgIssueMap.values()) {
+    uniquePgIssueQty += v;
+  }
+
+  return {
+    rows,
+    totalIssueQty,
+    uniquePgIssueQty,
+  };
+}
+
