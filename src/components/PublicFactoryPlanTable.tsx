@@ -393,15 +393,14 @@ export function PublicFactoryPlanTable({
               </div>
 
               <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-                <table className="w-full min-w-[1620px] text-left border-collapse">
+                <table className="w-full min-w-[1490px] text-left border-collapse">
                   <thead className="sticky top-0 z-10 bg-slate-900 text-white">
                     <tr className="text-[11px] font-semibold tracking-wide">
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Lifecycle</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">PG #</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Style / Description</th>
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Planned Qty</th>
-                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Cutting Input Qty</th>
-                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Cutting Output Qty</th>
+                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Cutting Qty</th>
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Output Qty</th>
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Balance to Output</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Output Status</th>
@@ -454,20 +453,6 @@ export function PublicFactoryPlanTable({
                           >
                             {rec.plannedQty !== null ? rec.plannedQty.toLocaleString() : '—'}
                           </span>
-                        </td>
-                        <td
-                          className="py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap text-slate-700"
-                          title={
-                            rec.cuttingInputQty === null
-                              ? 'Cutting Input column not available in online cutting sheet'
-                              : undefined
-                          }
-                        >
-                          {rec.cuttingInputQty !== null ? (
-                            rec.cuttingInputQty.toLocaleString()
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
                         </td>
                         <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
                           {rec.cuttingOutputQty.toLocaleString()}
@@ -573,7 +558,7 @@ export function PublicFactoryPlanTable({
       ) : (
         <div className="ct-surface rounded-2xl overflow-hidden">
           <div className="overflow-x-auto max-h-[68vh] overflow-y-auto">
-            <table className="w-full min-w-[1720px] text-left border-collapse">
+            <table className="w-full min-w-[1590px] text-left border-collapse">
               <thead className="sticky top-0 z-10 bg-slate-900 text-white">
                 <tr className="text-[11px] font-semibold tracking-wide">
                   <th className="py-3 px-3.5 whitespace-nowrap">Line · Zone</th>
@@ -582,8 +567,7 @@ export function PublicFactoryPlanTable({
                   <th className="py-3 px-3 whitespace-nowrap">PG #</th>
                   <th className="py-3 px-3 whitespace-nowrap">Style / Description</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Planned Qty</th>
-                  <th className="py-3 px-3 text-right whitespace-nowrap">Cutting Input Qty</th>
-                  <th className="py-3 px-3 text-right whitespace-nowrap">Cutting Output Qty</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Cutting Qty</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Output Qty</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Balance to Output</th>
                   <th className="py-3 px-3 whitespace-nowrap">Output Status</th>
@@ -643,20 +627,6 @@ export function PublicFactoryPlanTable({
                       >
                         {rec.plannedQty !== null ? rec.plannedQty.toLocaleString() : '—'}
                       </span>
-                    </td>
-                    <td
-                      className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap text-slate-700"
-                      title={
-                        rec.cuttingInputQty === null
-                          ? 'Cutting Input column not available in online cutting sheet'
-                          : undefined
-                      }
-                    >
-                      {rec.cuttingInputQty !== null ? (
-                        rec.cuttingInputQty.toLocaleString()
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
                       {rec.cuttingOutputQty.toLocaleString()}
