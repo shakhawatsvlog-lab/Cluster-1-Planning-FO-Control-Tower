@@ -42,6 +42,7 @@ import {
   getPublicWorkspaceState,
   getSiteConfig,
   getStoredSmtpConfig,
+  getSyncVersionSnapshot,
   getWorkspaceState,
   isAdminPasswordConfigured,
   resetPlanningWorkspace,
@@ -300,6 +301,18 @@ async function startServer() {
     });
   });
 
+  // Lightweight read-only version probe for 15s public background sync
+  app.get('/api/public/sync-version', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const snap = getSyncVersionSnapshot();
+    res.json({
+      ok: true,
+      version: snap.version,
+      referenceDateIso: snap.referenceDateIso,
+      cuttingUpdatedAtIso: snap.cuttingUpdatedAtIso,
+    });
+  });
+
   // Strict read-only public endpoint for external factory users (/master-plan)
   app.get('/api/public/master-plan', (req, res) => {
     try {
@@ -457,9 +470,20 @@ async function startServer() {
     }
   });
 
+  app.get('/api/workspace/sync-version', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    res.setHeader('Cache-Control', 'no-store');
+    const snap = getSyncVersionSnapshot();
+    res.json({
+      ok: true,
+      ...snap,
+    });
+  });
+
   app.get('/api/workspace', (req, res) => {
     if (!requireAdmin(req, res)) return;
     try {
+      res.setHeader('Cache-Control', 'no-store');
       const pub = getPublicWorkspaceState(true);
       res.json({
         ...pub,

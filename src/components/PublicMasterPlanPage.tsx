@@ -9,6 +9,10 @@ import type {
   PublicMasterPlanResponse,
 } from '../shared/plannerTypes.ts';
 import { BackendWakeupPanel } from './BackendWakeupPanel.tsx';
+import {
+  ConnectionStatusBadge,
+  type SyncConnectionState,
+} from './ConnectionStatusBadge.tsx';
 import { isRecordInDateRange } from './FilterToolbar.tsx';
 import type { DateRangeFilterValue } from './FilterToolbar.tsx';
 import { MasterPlanInstallButton } from './MasterPlanInstallButton.tsx';
@@ -29,52 +33,23 @@ import { SiteFooter } from './SiteFooter.tsx';
 import { usePWAInstall } from '../hooks/usePWAInstall.ts';
 import { apiUrl } from '../lib/apiBase.ts';
 import { buildRouteHref } from '../lib/routes.ts';
+import {
+  BACKGROUND_SYNC_INTERVAL_MS,
+  HttpStatusError,
+  SYNC_FOCUS_COOLDOWN_MS,
+  SYNC_REQUEST_TIMEOUT_MS,
+  formatCurrentTimeLabel,
+  getProgressiveBackoffDelayMs,
+  isBrowserOffline,
+  isColdStartOrNetworkFailure,
+  probeServerHealth,
+} from '../lib/syncClient.ts';
 
-const LIVE_POLL_INTERVAL_MS = 15_000;
 const SPLASH_MIN_REVEAL_MS = 950;
 const SPLASH_REDUCED_MOTION_MS = 120;
 const SPLASH_FAILSAFE_MAX_MS = 2400;
 const SPLASH_FADE_MS = 320;
 const APP_BASE_PREFIX = '/Cluster-1-Planning-FO-Control-Tower';
-const FETCH_TIMEOUT_MS = 12_000;
-
-class HttpStatusError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = 'HttpStatusError';
-    this.status = status;
-  }
-}
-
-function isColdStartOrNetworkFailure(err: unknown): boolean {
-  if (err instanceof HttpStatusError) {
-    return (
-      err.status === 502 ||
-      err.status === 503 ||
-      err.status === 504 ||
-      (err.status >= 520 && err.status <= 524)
-    );
-  }
-  if (err instanceof TypeError) {
-    return true;
-  }
-  if (err instanceof DOMException && err.name === 'AbortError') {
-    return true;
-  }
-  if (err instanceof Error) {
-    if (err.name === 'AbortError') return true;
-    const msg = err.message.toLowerCase();
-    return (
-      msg.includes('failed to fetch') ||
-      msg.includes('networkerror') ||
-      msg.includes('load failed') ||
-      msg.includes('network request failed') ||
-      msg.includes('timed out')
-    );
-  }
-  return false;
-}
 
 function readInitialFactoryFromUrl(): string | null {
   try {
@@ -125,6 +100,10 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wakeupActive, setWakeupActive] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<SyncConnectionState>(() =>
+    isBrowserOffline() ? 'offline' : 'syncing'
+  );
+  const [retryInSeconds, setRetryInSeconds] = useState<number | null>(null);
   const [logoError, setLogoError] = useState(false);
 
   // FO Needed Tab State (Read-Only Mirror of Control Tower Selected FO Needed Summary Box)
@@ -132,12 +111,12 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
   const [foNeededLoading, setFoNeededLoading] = useState(false);
   const [foNeededError, setFoNeededError] = useState<string | null>(null);
 
-  // Branded in-app splash screen lifecycle (shown once per launch / direct URL load / refresh)
+  // Branded in-app splash screen lifecycle
   const [splashPhase, setSplashPhase] = useState<'showing' | 'fading' | 'done'>('showing');
   const [initialDataSettled, setInitialDataSettled] = useState(false);
   const [minRevealDone, setMinRevealDone] = useState(false);
 
-  // Selected factory filters (preserved across tab switches)
+  // Selected factory filters (preserved across background sync & tab switches)
   const [selectedLine, setSelectedLine] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<PublicProductionStatusFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -152,6 +131,15 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
   const foAbortControllerRef = useRef<AbortController | null>(null);
   const selectedFactoryRef = useRef<FactoryName | null>(null);
   const wakeupActiveRef = useRef(false);
+  const recordsCountRef = useRef(0);
+  const lastMasterVersionRef = useRef<string | null>(null);
+  const lastFoVersionRef = useRef<string | null>(null);
+  const bgSyncInFlightRef = useRef(false);
+  const lastSyncCompletedMsRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectInFlightRef = useRef(false);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     selectedFactoryRef.current = selectedFactory;
@@ -160,6 +148,10 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
   useEffect(() => {
     wakeupActiveRef.current = wakeupActive;
   }, [wakeupActive]);
+
+  useEffect(() => {
+    recordsCountRef.current = records.length;
+  }, [records.length]);
 
   // Isolate document PWA manifest, title, and Apple touch metadata strictly to Alpine Master Plan
   useEffect(() => {
@@ -241,7 +233,16 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
     };
   }, [splashPhase, initialDataSettled, minRevealDone]);
 
-  const fetchPublicFoNeeded = useCallback(async (quiet = false) => {
+  const stopReconnectBackoff = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectAttemptRef.current = 0;
+    setRetryInSeconds(null);
+  }, []);
+
+  const fetchPublicFoNeeded = useCallback(async (quiet = false): Promise<boolean> => {
     if (foAbortControllerRef.current) {
       foAbortControllerRef.current.abort();
     }
@@ -251,7 +252,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
     const timeoutId = window.setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, FETCH_TIMEOUT_MS);
+    }, SYNC_REQUEST_TIMEOUT_MS);
 
     if (!quiet) {
       setFoNeededLoading(true);
@@ -268,30 +269,38 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
       }
 
       const data = (await res.json()) as PublicFoNeededResponse;
+      if (!mountedRef.current) return true;
       setFoNeededData(data);
+      lastFoVersionRef.current = data.updatedAtIso || null;
       setFoNeededError(null);
-      setWakeupActive(false);
+      return true;
     } catch (err) {
-      if (controller.signal.aborted && !timedOut) return;
+      if (controller.signal.aborted && !timedOut) return false;
       if (isColdStartOrNetworkFailure(err)) {
-        setWakeupActive(true);
+        if (recordsCountRef.current === 0) {
+          setWakeupActive(true);
+        }
+        setConnectionStatus(isBrowserOffline() ? 'offline' : 'reconnecting');
         setFoNeededError(null);
       } else {
         setFoNeededError(
           err instanceof Error ? err.message : 'Unable to load FO Needed Checklist.'
         );
       }
+      return false;
     } finally {
       window.clearTimeout(timeoutId);
-      setFoNeededLoading(false);
+      if (mountedRef.current) {
+        setFoNeededLoading(false);
+      }
     }
   }, []);
 
   const fetchFactoryMasterPlan = useCallback(
     async (
       targetFactory: string | null,
-      mode: 'initial' | 'switch' | 'refresh'
-    ) => {
+      mode: 'initial' | 'switch' | 'refresh' | 'silent'
+    ): Promise<boolean> => {
       const seq = ++requestSeqRef.current;
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -302,14 +311,19 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
       const timeoutId = window.setTimeout(() => {
         timedOut = true;
         controller.abort();
-      }, FETCH_TIMEOUT_MS);
+      }, SYNC_REQUEST_TIMEOUT_MS);
 
       if (mode === 'initial') {
         setLoading(true);
+        setConnectionStatus(isBrowserOffline() ? 'offline' : 'syncing');
       } else if (mode === 'switch') {
         setSwitchingFactory(true);
-      } else {
+        setConnectionStatus(isBrowserOffline() ? 'offline' : 'syncing');
+      } else if (mode === 'refresh') {
         setRefreshing(true);
+        setConnectionStatus(isBrowserOffline() ? 'offline' : 'syncing');
+      } else {
+        setConnectionStatus(isBrowserOffline() ? 'offline' : 'syncing');
       }
 
       try {
@@ -335,7 +349,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
         }
 
         const data = (await res.json()) as PublicMasterPlanResponse;
-        if (seq !== requestSeqRef.current) return;
+        if (seq !== requestSeqRef.current || !mountedRef.current) return false;
 
         const includedFactories = Array.isArray(data.meta?.factoriesIncluded)
           ? data.meta.factoriesIncluded
@@ -359,29 +373,36 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
         setCuttingSheetSummary(data.cuttingSheetSummary);
         if (data.referenceDateIso) setReferenceDateIso(data.referenceDateIso);
         if (data.branding?.companyName) setCompanyName(data.branding.companyName);
-        setLastSyncedAt(
-          new Date().toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          })
-        );
+
+        lastMasterVersionRef.current = data.updatedAtIso || null;
+        lastSyncCompletedMsRef.current = Date.now();
+        setLastSyncedAt(formatCurrentTimeLabel());
         setError(null);
         setWakeupActive(false);
+        setConnectionStatus('connected');
+        stopReconnectBackoff();
+        return true;
       } catch (err) {
         if ((controller.signal.aborted && !timedOut) || seq !== requestSeqRef.current) {
-          return;
+          return false;
         }
+        if (!mountedRef.current) return false;
+
         if (isColdStartOrNetworkFailure(err)) {
-          setWakeupActive(true);
+          // Only show full wake-up illustration if we have no loaded data yet; otherwise keep existing UI usable while reconnecting silently!
+          if (recordsCountRef.current === 0) {
+            setWakeupActive(true);
+          }
           setError(null);
+          setConnectionStatus(isBrowserOffline() ? 'offline' : 'reconnecting');
         } else {
           setWakeupActive(false);
           setError(err instanceof Error ? err.message : 'Unable to load live Master Plan.');
         }
+        return false;
       } finally {
         window.clearTimeout(timeoutId);
-        if (seq === requestSeqRef.current) {
+        if (seq === requestSeqRef.current && mountedRef.current) {
           setLoading(false);
           setSwitchingFactory(false);
           setRefreshing(false);
@@ -391,45 +412,209 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
         }
       }
     },
-    []
+    [stopReconnectBackoff]
   );
 
-  const refreshAllPublicViews = useCallback(
-    (mode: 'initial' | 'refresh' = 'refresh') => {
-      const target = selectedFactoryRef.current ?? readInitialFactoryFromUrl();
-      void fetchFactoryMasterPlan(target, mode);
-      void fetchPublicFoNeeded(true);
+  // Progressive-backoff health probe loop when connection drops AFTER initial data loaded
+  const scheduleReconnectProbe = useCallback(() => {
+    if (!mountedRef.current || wakeupActiveRef.current) return;
+    if (reconnectTimerRef.current !== null || reconnectInFlightRef.current) return;
+
+    if (isBrowserOffline()) {
+      setConnectionStatus('offline');
+      setRetryInSeconds(null);
+      return;
+    }
+
+    const delayMs = getProgressiveBackoffDelayMs(reconnectAttemptRef.current);
+    setConnectionStatus('reconnecting');
+    setRetryInSeconds(Math.max(1, Math.ceil(delayMs / 1000)));
+
+    reconnectTimerRef.current = window.setTimeout(async () => {
+      reconnectTimerRef.current = null;
+      if (!mountedRef.current || wakeupActiveRef.current) return;
+      if (isBrowserOffline()) {
+        setConnectionStatus('offline');
+        setRetryInSeconds(null);
+        return;
+      }
+      if (reconnectInFlightRef.current) return;
+
+      reconnectInFlightRef.current = true;
+      setRetryInSeconds(null);
+      let healthy = false;
+      try {
+        healthy = await probeServerHealth();
+      } finally {
+        reconnectInFlightRef.current = false;
+      }
+
+      if (!mountedRef.current || wakeupActiveRef.current) return;
+
+      if (healthy) {
+        stopReconnectBackoff();
+        setConnectionStatus('syncing');
+        await Promise.all([
+          fetchFactoryMasterPlan(selectedFactoryRef.current, 'silent'),
+          fetchPublicFoNeeded(true),
+        ]);
+      } else {
+        reconnectAttemptRef.current += 1;
+        scheduleReconnectProbe();
+      }
+    }, delayMs);
+  }, [fetchFactoryMasterPlan, fetchPublicFoNeeded, stopReconnectBackoff]);
+
+  // Smart 15-second differential background synchronization (lightweight version probe first, fetches data silently only when changed)
+  const runSmartBackgroundSync = useCallback(
+    async (forceFull = false, bypassWakeupGuard = false) => {
+      if (!mountedRef.current || (wakeupActiveRef.current && !bypassWakeupGuard)) return;
+      if (bgSyncInFlightRef.current) return;
+
+      if (isBrowserOffline()) {
+        setConnectionStatus('offline');
+        return;
+      }
+
+      if (
+        !forceFull &&
+        Date.now() - lastSyncCompletedMsRef.current < SYNC_FOCUS_COOLDOWN_MS
+      ) {
+        return;
+      }
+
+      bgSyncInFlightRef.current = true;
+      if (forceFull) {
+        setConnectionStatus('syncing');
+      }
+
+      const controller = new AbortController();
+      let timedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, SYNC_REQUEST_TIMEOUT_MS);
+
+      try {
+        if (!forceFull && lastMasterVersionRef.current) {
+          const verRes = await fetch(apiUrl('/api/public/sync-version'), {
+            cache: 'no-store',
+            signal: controller.signal,
+          });
+          if (!verRes.ok) {
+            throw new HttpStatusError(
+              verRes.status,
+              `Unable to check Master Plan sync version (${verRes.status})`
+            );
+          }
+          const verJson = (await verRes.json()) as {
+            ok?: boolean;
+            version?: string;
+          };
+          const serverVersion = verJson?.version || null;
+          const masterNeedsUpdate =
+            !serverVersion || serverVersion !== lastMasterVersionRef.current;
+          const foNeedsUpdate =
+            !lastFoVersionRef.current ||
+            !serverVersion ||
+            serverVersion !== lastFoVersionRef.current;
+
+          if (!masterNeedsUpdate && !foNeedsUpdate) {
+            lastSyncCompletedMsRef.current = Date.now();
+            setLastSyncedAt(formatCurrentTimeLabel());
+            setConnectionStatus('connected');
+            stopReconnectBackoff();
+            return;
+          }
+
+          setConnectionStatus('syncing');
+          const tasks: Promise<boolean>[] = [];
+          if (masterNeedsUpdate) {
+            tasks.push(fetchFactoryMasterPlan(selectedFactoryRef.current, 'silent'));
+          }
+          if (foNeedsUpdate) {
+            tasks.push(fetchPublicFoNeeded(true));
+          }
+          await Promise.all(tasks);
+          return;
+        }
+
+        await Promise.all([
+          fetchFactoryMasterPlan(
+            selectedFactoryRef.current,
+            bypassWakeupGuard ? 'silent' : 'refresh'
+          ),
+          fetchPublicFoNeeded(true),
+        ]);
+      } catch (err) {
+        if (controller.signal.aborted && !timedOut) return;
+        if (!mountedRef.current) return;
+        if (isColdStartOrNetworkFailure(err)) {
+          if (recordsCountRef.current === 0) {
+            setWakeupActive(true);
+          } else {
+            scheduleReconnectProbe();
+          }
+          setConnectionStatus(isBrowserOffline() ? 'offline' : 'reconnecting');
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+        bgSyncInFlightRef.current = false;
+      }
     },
-    [fetchFactoryMasterPlan, fetchPublicFoNeeded]
+    [fetchFactoryMasterPlan, fetchPublicFoNeeded, scheduleReconnectProbe, stopReconnectBackoff]
   );
 
-  // Initial load + 15s live polling scoped to currently selected factory + FO Needed
+  // Initial load + 15s smart background sync + online/offline & visibility listeners (ZERO full-page reloads)
   useEffect(() => {
+    mountedRef.current = true;
     const initialFromUrl = readInitialFactoryFromUrl();
-    void fetchFactoryMasterPlan(initialFromUrl, 'initial');
-    void fetchPublicFoNeeded(false);
+
+    void (async () => {
+      const ok = await fetchFactoryMasterPlan(initialFromUrl, 'initial');
+      await fetchPublicFoNeeded(false);
+      if (!ok && recordsCountRef.current > 0 && mountedRef.current) {
+        scheduleReconnectProbe();
+      }
+    })();
 
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === 'visible' && !wakeupActiveRef.current) {
-        void fetchFactoryMasterPlan(selectedFactoryRef.current, 'refresh');
-        void fetchPublicFoNeeded(true);
+        void runSmartBackgroundSync(false);
       }
-    }, LIVE_POLL_INTERVAL_MS);
+    }, BACKGROUND_SYNC_INTERVAL_MS);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible' && !wakeupActiveRef.current) {
-        void fetchFactoryMasterPlan(selectedFactoryRef.current, 'refresh');
-        void fetchPublicFoNeeded(true);
+        void runSmartBackgroundSync(false);
       }
+    };
+
+    const handleOnline = () => {
+      stopReconnectBackoff();
+      if (!wakeupActiveRef.current) {
+        void runSmartBackgroundSync(true);
+      }
+    };
+
+    const handleOffline = () => {
+      stopReconnectBackoff();
+      setConnectionStatus('offline');
     };
 
     window.addEventListener('focus', handleVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
     return () => {
+      mountedRef.current = false;
       window.clearInterval(intervalId);
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      stopReconnectBackoff();
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -437,7 +622,13 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
         foAbortControllerRef.current.abort();
       }
     };
-  }, [fetchFactoryMasterPlan, fetchPublicFoNeeded]);
+  }, [
+    fetchFactoryMasterPlan,
+    fetchPublicFoNeeded,
+    runSmartBackgroundSync,
+    scheduleReconnectProbe,
+    stopReconnectBackoff,
+  ]);
 
   const handleSelectFactory = (factory: FactoryName) => {
     if (factory === selectedFactory && !error && !wakeupActive) return;
@@ -450,17 +641,18 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
 
   const handleTabChange = (nextTab: PublicMasterPlanTab) => {
     setActiveTab(nextTab);
-    if (nextTab === 'fo_needed' && !wakeupActive) {
-      void fetchPublicFoNeeded(!foNeededData ? false : true);
+    if (nextTab === 'fo_needed' && !wakeupActive && !foNeededData) {
+      void fetchPublicFoNeeded(false);
     }
   };
 
   const handleWakeupRecovered = useCallback(() => {
-    setWakeupActive(false);
+    // Keep the wake-up animation visible until live data finishes loading (setWakeupActive(false) runs on fetch success)
     setError(null);
     setFoNeededError(null);
-    refreshAllPublicViews('refresh');
-  }, [refreshAllPublicViews]);
+    stopReconnectBackoff();
+    void runSmartBackgroundSync(true, true);
+  }, [runSmartBackgroundSync, stopReconnectBackoff]);
 
   // Defense-in-depth: strictly enforce single-factory record isolation in UI state
   const factoryRecords = useMemo(() => {
@@ -553,20 +745,20 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            {lastSyncedAt && (
-              <span className="hidden xl:inline text-xs font-mono tabular-nums text-slate-500 whitespace-nowrap">
-                Synced {lastSyncedAt}
-              </span>
-            )}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <ConnectionStatusBadge
+              status={connectionStatus}
+              lastSyncedAt={lastSyncedAt}
+              retryInSeconds={retryInSeconds}
+            />
 
             <MasterPlanInstallButton />
 
             <button
               type="button"
-              onClick={() => refreshAllPublicViews('refresh')}
+              onClick={() => void runSmartBackgroundSync(true)}
               disabled={refreshing || switchingFactory}
-              title="Refresh live Master Plan data"
+              title="Sync live Master Plan data now"
               className="h-9 px-3.5 rounded-lg bg-gradient-to-r from-[#0a1633] via-cyan-800 to-teal-700 hover:from-[#0f224d] hover:to-teal-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-[0_6px_16px_-6px_rgba(13,148,136,0.45)] transition-all cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0"
             >
               <RefreshCw
@@ -606,7 +798,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
         {wakeupActive ? (
           <BackendWakeupPanel
             onReconnected={handleWakeupRecovered}
-            onManualRetry={() => refreshAllPublicViews('refresh')}
+            onManualRetry={() => void runSmartBackgroundSync(true, true)}
             isRetrying={refreshing || loading}
           />
         ) : activeTab === 'fo_needed' ? (
@@ -719,7 +911,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
             <span className="font-mono tabular-nums text-slate-700">
               {formatDisplayDate(referenceDateIso)}
             </span>{' '}
-            · Live auto-refresh (15s)
+            · Smart Live Sync (15s)
           </span>
         }
       />

@@ -282,6 +282,23 @@ export function getWorkspaceState(): PersistedWorkspaceData {
   return cachedState;
 }
 
+export interface SyncVersionSnapshot {
+  version: string;
+  referenceDateIso: string;
+  cuttingUpdatedAtIso: string | null;
+  cuttingCheckedAtIso: string | null;
+}
+
+export function getSyncVersionSnapshot(): SyncVersionSnapshot {
+  const state = getWorkspaceState();
+  return {
+    version: state.updatedAtIso,
+    referenceDateIso: state.referenceDateIso,
+    cuttingUpdatedAtIso: state.cuttingSheetSync?.lastUpdatedAtIso ?? null,
+    cuttingCheckedAtIso: state.cuttingSheetSync?.lastCheckedAtIso ?? null,
+  };
+}
+
 export function getPublicWorkspaceState(isAdmin = false) {
   const state = getWorkspaceState();
   const needsInitialSetup = !isAdminPasswordConfigured();

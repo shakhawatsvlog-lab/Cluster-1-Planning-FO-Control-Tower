@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { RefreshCw, Wifi } from 'lucide-react';
-import { apiUrl } from '../lib/apiBase.ts';
+import {
+  getProgressiveBackoffDelayMs,
+  isBrowserOffline,
+  probeServerHealth,
+} from '../lib/syncClient.ts';
 
 const WAKEUP_TOTAL_SECONDS = 90;
-const HEALTH_PROBE_INTERVAL_MS = 5000;
-const HEALTH_PROBE_TIMEOUT_MS = 4500;
 
 interface BackendWakeupPanelProps {
   onReconnected: () => void;
@@ -26,6 +28,8 @@ export function BackendWakeupPanel({
 }: BackendWakeupPanelProps) {
   const [secondsLeft, setSecondsLeft] = useState(WAKEUP_TOTAL_SECONDS);
   const [attemptCount, setAttemptCount] = useState(0);
+  const [nextProbeSeconds, setNextProbeSeconds] = useState<number>(2);
+  const [retryCycle, setRetryCycle] = useState(0);
   const probeInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const secondsLeftRef = useRef(WAKEUP_TOTAL_SECONDS);
@@ -41,7 +45,9 @@ export function BackendWakeupPanel({
 
   useEffect(() => {
     mountedRef.current = true;
-    const activeAbortRef: { current: AbortController | null } = { current: null };
+    const abortController = new AbortController();
+    let nextProbeTimerId: number | null = null;
+    let backoffIndex = 0;
 
     const countdownId = window.setInterval(() => {
       setSecondsLeft((prev) => {
@@ -53,66 +59,77 @@ export function BackendWakeupPanel({
         secondsLeftRef.current = next;
         return next;
       });
+      setNextProbeSeconds((prev) => (prev > 1 ? prev - 1 : 0));
     }, 1000);
 
+    const scheduleNextProbe = (delayMs: number) => {
+      if (!mountedRef.current || secondsLeftRef.current <= 0) return;
+      if (nextProbeTimerId !== null) {
+        window.clearTimeout(nextProbeTimerId);
+      }
+      setNextProbeSeconds(Math.max(1, Math.ceil(delayMs / 1000)));
+      nextProbeTimerId = window.setTimeout(() => {
+        void runHealthProbe();
+      }, delayMs);
+    };
+
     const runHealthProbe = async () => {
-      if (!mountedRef.current) return;
-      if (secondsLeftRef.current <= 0) return;
+      if (!mountedRef.current || secondsLeftRef.current <= 0) return;
       if (probeInFlightRef.current) return;
+
+      if (isBrowserOffline()) {
+        const delayMs = getProgressiveBackoffDelayMs(backoffIndex);
+        backoffIndex += 1;
+        scheduleNextProbe(delayMs);
+        return;
+      }
 
       probeInFlightRef.current = true;
       setAttemptCount((prev) => prev + 1);
-      const controller = new AbortController();
-      activeAbortRef.current = controller;
-      const timeoutId = window.setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+      setNextProbeSeconds(0);
 
       try {
-        const res = await fetch(apiUrl('/api/health'), {
-          cache: 'no-store',
-          signal: controller.signal,
-        });
+        const healthy = await probeServerHealth(abortController.signal);
         if (!mountedRef.current) return;
-        if (res.ok) {
-          const payload = (await res.json().catch(() => null)) as { ok?: boolean } | null;
-          if (payload?.ok) {
-            onReconnectedRef.current();
-          }
+        if (healthy) {
+          onReconnectedRef.current();
+          return;
         }
-      } catch {
-        // Server still waking up — silently wait for next scheduled probe
       } finally {
-        window.clearTimeout(timeoutId);
         probeInFlightRef.current = false;
-        activeAbortRef.current = null;
       }
+
+      const delayMs = getProgressiveBackoffDelayMs(backoffIndex);
+      backoffIndex += 1;
+      scheduleNextProbe(delayMs);
     };
 
-    // Trigger first health probe shortly after displaying wake-up panel, then every 5s
-    const initialProbeTimer = window.setTimeout(() => {
-      void runHealthProbe();
-    }, 2500);
+    // Start first probe cleanly with progressive backoff (2s -> 4s -> 8s -> 15s -> 30s)
+    scheduleNextProbe(getProgressiveBackoffDelayMs(0));
 
-    const probeIntervalId = window.setInterval(() => {
-      if (secondsLeftRef.current > 0) {
-        void runHealthProbe();
-      }
-    }, HEALTH_PROBE_INTERVAL_MS);
+    const handleOnline = () => {
+      backoffIndex = 0;
+      void runHealthProbe();
+    };
+    window.addEventListener('online', handleOnline);
 
     return () => {
       mountedRef.current = false;
       window.clearInterval(countdownId);
-      window.clearTimeout(initialProbeTimer);
-      window.clearInterval(probeIntervalId);
-      if (activeAbortRef.current) {
-        activeAbortRef.current.abort();
+      if (nextProbeTimerId !== null) {
+        window.clearTimeout(nextProbeTimerId);
       }
+      window.removeEventListener('online', handleOnline);
+      abortController.abort();
     };
-  }, []);
+  }, [retryCycle]);
 
   const handleManualResetRetry = () => {
     setSecondsLeft(WAKEUP_TOTAL_SECONDS);
     secondsLeftRef.current = WAKEUP_TOTAL_SECONDS;
     setAttemptCount(0);
+    setNextProbeSeconds(2);
+    setRetryCycle((c) => c + 1);
     onManualRetry();
   };
 
@@ -151,10 +168,7 @@ export function BackendWakeupPanel({
             role="img"
             aria-label="Animated mouse unplugging the server cable while a confused cat inspects the plug"
           >
-            {/* Subtle Floor Shadow */}
             <ellipse cx="160" cy="138" rx="126" ry="9" fill="rgba(10, 22, 51, 0.08)" />
-
-            {/* Left Server Box Port */}
             <rect
               x="16"
               y="72"
@@ -169,7 +183,6 @@ export function BackendWakeupPanel({
             <circle cx="38" cy="85" r="2.5" fill="#f59e0b" />
             <rect x="23" y="96" width="20" height="22" rx="3" fill="#1e293b" stroke="#38bdf8" strokeWidth="1" />
 
-            {/* Cable Connected to Mouse & Unplugged Spark Gap */}
             <path
               d="M44 108 C 58 108, 62 124, 78 122 C 92 120, 98 112, 114 114"
               fill="none"
@@ -178,7 +191,6 @@ export function BackendWakeupPanel({
               strokeLinecap="round"
             />
 
-            {/* Unplugged Cable Spark */}
             <g className="mp-cable-spark">
               <circle cx="146" cy="112" r="5" fill="rgba(245, 158, 11, 0.25)" />
               <path
@@ -189,7 +201,6 @@ export function BackendWakeupPanel({
               />
             </g>
 
-            {/* Disconnected Right Cable Section going to Plug near Cat */}
             <path
               d="M156 115 C 174 118, 186 128, 206 126"
               fill="none"
@@ -198,14 +209,11 @@ export function BackendWakeupPanel({
               strokeLinecap="round"
               strokeDasharray="4 3"
             />
-            {/* Plug Head */}
             <rect x="148" y="109" width="12" height="10" rx="2" fill="#0f172a" />
             <line x1="143" y1="112" x2="148" y2="112" stroke="#94a3b8" strokeWidth="1.8" strokeLinecap="round" />
             <line x1="143" y1="116" x2="148" y2="116" stroke="#94a3b8" strokeWidth="1.8" strokeLinecap="round" />
 
-            {/* Mischievous Mouse Tugging the Cable */}
             <g className="mp-mouse-tug">
-              {/* Mouse tail */}
               <path
                 d="M72 118 C 58 114, 55 128, 45 123"
                 fill="none"
@@ -213,22 +221,16 @@ export function BackendWakeupPanel({
                 strokeWidth="2"
                 strokeLinecap="round"
               />
-              {/* Mouse body */}
               <ellipse cx="90" cy="118" rx="18" ry="12" fill="#64748b" />
               <ellipse cx="95" cy="120" rx="11" ry="8" fill="#94a3b8" />
-              {/* Mouse ear */}
               <circle cx="101" cy="107" r="6" fill="#475569" />
               <circle cx="101" cy="107" r="3.4" fill="#fca5a5" />
-              {/* Mouse eye & nose */}
               <circle cx="105" cy="115" r="1.7" fill="#0f172a" />
               <circle cx="111" cy="118" r="2.2" fill="#fb7185" />
-              {/* Tiny paws holding cable */}
               <circle cx="112" cy="121" r="2.6" fill="#64748b" />
             </g>
 
-            {/* Curious / Confused Cat Inspecting the Unplugged Cable */}
             <g>
-              {/* Wagging Cat Tail */}
               <path
                 className="mp-cat-tail"
                 d="M273 125 C 294 122, 298 96, 286 92"
@@ -237,30 +239,23 @@ export function BackendWakeupPanel({
                 strokeWidth="7"
                 strokeLinecap="round"
               />
-              {/* Cat Torso */}
               <ellipse cx="248" cy="111" rx="26" ry="23" fill="#1e3a5f" />
               <ellipse cx="244" cy="115" rx="13" ry="16" fill="#e2e8f0" />
-              {/* Cat Front Paws */}
               <ellipse cx="231" cy="131" rx="7" ry="4.5" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
               <ellipse cx="250" cy="132" rx="7" ry="4.5" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
 
-              {/* Tilting Cat Head */}
               <g className="mp-cat-head">
-                {/* Ears */}
                 <polygon points="222,68 228,44 242,60" fill="#0f2347" />
                 <polygon points="226,64 230,50 238,60" fill="#7dd3fc" opacity="0.65" />
                 <polygon points="247,59 261,44 267,68" fill="#0f2347" />
                 <polygon points="251,59 259,50 263,64" fill="#7dd3fc" opacity="0.65" />
-                {/* Head */}
                 <ellipse cx="244" cy="77" rx="24" ry="20" fill="#1e3a5f" />
-                {/* Eyes */}
                 <circle cx="235" cy="75" r="4.2" fill="#ffffff" />
                 <circle cx="253" cy="75" r="4.2" fill="#ffffff" />
                 <circle cx="234.5" cy="75.5" r="2.1" fill="#0a1633" />
                 <circle cx="252.5" cy="75.5" r="2.1" fill="#0a1633" />
                 <circle cx="233.7" cy="74.6" r="0.8" fill="#22d3ee" />
                 <circle cx="251.7" cy="74.6" r="0.8" fill="#22d3ee" />
-                {/* Nose & Mouth */}
                 <polygon points="241,82 247,82 244,85" fill="#fda4af" />
                 <path
                   d="M240 87 Q 244 89 248 87"
@@ -269,14 +264,12 @@ export function BackendWakeupPanel({
                   strokeWidth="1.5"
                   strokeLinecap="round"
                 />
-                {/* Whiskers */}
                 <line x1="214" y1="78" x2="225" y2="80" stroke="#94a3b8" strokeWidth="1.2" strokeLinecap="round" />
                 <line x1="214" y1="84" x2="225" y2="83" stroke="#94a3b8" strokeWidth="1.2" strokeLinecap="round" />
                 <line x1="263" y1="80" x2="274" y2="78" stroke="#94a3b8" strokeWidth="1.2" strokeLinecap="round" />
                 <line x1="263" y1="83" x2="274" y2="84" stroke="#94a3b8" strokeWidth="1.2" strokeLinecap="round" />
               </g>
 
-              {/* Floating Question Bubble */}
               <g className="mp-cat-question">
                 <rect
                   x="269"
@@ -316,7 +309,7 @@ export function BackendWakeupPanel({
           </p>
         </div>
 
-        {/* Progress Bar & Live Status */}
+        {/* Progress Bar & Live Progressive Backoff Status */}
         <div className="w-full max-w-sm space-y-2">
           <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden">
             <div
@@ -336,7 +329,7 @@ export function BackendWakeupPanel({
           </div>
         </div>
 
-        {/* Manual Retry Action once 90s reaches 00:00 (and unobtrusive check option) */}
+        {/* Manual Retry Action once 90s reaches 00:00 */}
         {timerFinished && (
           <div className="pt-1 flex flex-col items-center gap-2">
             <button

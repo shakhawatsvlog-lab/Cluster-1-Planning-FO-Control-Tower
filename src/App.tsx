@@ -64,11 +64,26 @@ import {
   resolveBaseAppLinks,
 } from './components/AppLinkModal.tsx';
 import { OfflineIndicator } from './components/PWAInstallButton.tsx';
+import {
+  ConnectionStatusBadge,
+  type SyncConnectionState,
+} from './components/ConnectionStatusBadge.tsx';
 import { apiUrl } from './lib/apiBase.ts';
 import {
   readStoredAdminToken,
   writeStoredAdminToken,
 } from './lib/adminSession.ts';
+import {
+  BACKGROUND_SYNC_INTERVAL_MS,
+  HttpStatusError,
+  SYNC_FOCUS_COOLDOWN_MS,
+  SYNC_REQUEST_TIMEOUT_MS,
+  formatCurrentTimeLabel,
+  getProgressiveBackoffDelayMs,
+  isBrowserOffline,
+  isColdStartOrNetworkFailure,
+  probeServerHealth,
+} from './lib/syncClient.ts';
 import {
   getAppRoute,
   navigateToRoute,
@@ -133,6 +148,7 @@ interface WorkspaceApiResponse {
   cuttingEntries: DailyCuttingEntry[];
   referenceDateIso: string;
   hasCustomEdits: boolean;
+  updatedAtIso?: string;
   reminders: ReminderWorkspaceState;
   smtpStatus: SmtpSettingsPublic;
   siteConfig?: WebsiteControlConfig;
@@ -182,6 +198,11 @@ export default function App() {
   const [bannerMessage, setBannerMessage] = useState<string | null>(null);
   const [hasCustomEdits, setHasCustomEdits] = useState(false);
   const [logoError, setLogoError] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<SyncConnectionState>(() =>
+    isBrowserOffline() ? 'offline' : 'connected'
+  );
+  const [lastAdminSyncedAt, setLastAdminSyncedAt] = useState<string | null>(null);
+  const [retryInSeconds, setRetryInSeconds] = useState<number | null>(null);
 
   const handleNavigatePortal = useCallback((nextRoute: AppPortalRoute) => {
     navigateToRoute(nextRoute);
@@ -233,6 +254,13 @@ export default function App() {
   const adminTokenRef = useRef<string | null>(readStoredAdminToken());
   const referenceDateIsoRef = useRef<string>(referenceDateIso);
   referenceDateIsoRef.current = referenceDateIso;
+  const lastServerVersionRef = useRef<string | null>(null);
+  const pendingLocalChangesRef = useRef(false);
+  const bgSyncInFlightRef = useRef(false);
+  const lastBgSyncMsRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectInFlightRef = useRef(false);
 
   const setSessionToken = useCallback((token: string | null) => {
     const clean = token && token.trim() ? token.trim() : null;
@@ -279,10 +307,16 @@ export default function App() {
       nextRefDateIso: string,
       customEditsFlag = true
     ) => {
+      pendingLocalChangesRef.current = true;
       if (syncTimerRef.current) {
         window.clearTimeout(syncTimerRef.current);
       }
       syncTimerRef.current = window.setTimeout(async () => {
+        syncTimerRef.current = null;
+        if (isBrowserOffline()) {
+          setConnectionStatus('offline');
+          return;
+        }
         try {
           const res = await fetch(apiUrl('/api/workspace'), {
             method: 'PUT',
@@ -297,14 +331,31 @@ export default function App() {
             }),
           });
           if (res.status === 401 || res.status === 403) {
+            pendingLocalChangesRef.current = false;
             setSessionToken(null);
             setAdminUnlocked(false);
             setBannerMessage(
               'Admin session expired or missing. Please sign in to save changes to the Control Tower.'
             );
+            return;
           }
-        } catch {
-          // Local backup remains intact if offline
+          if (res.ok) {
+            const payload = (await res.json().catch(() => null)) as {
+              updatedAtIso?: string;
+            } | null;
+            if (payload?.updatedAtIso) {
+              lastServerVersionRef.current = payload.updatedAtIso;
+            }
+            pendingLocalChangesRef.current = false;
+            lastBgSyncMsRef.current = Date.now();
+            setLastAdminSyncedAt(formatCurrentTimeLabel());
+            setConnectionStatus('connected');
+          }
+        } catch (err) {
+          if (isColdStartOrNetworkFailure(err)) {
+            setConnectionStatus(isBrowserOffline() ? 'offline' : 'reconnecting');
+          }
+          // Local backup remains intact if offline or reconnecting
         }
       }, 250);
     },
@@ -401,7 +452,14 @@ export default function App() {
       setReminders(data.reminders);
       setSmtpStatus(data.smtpStatus || INITIAL_SMTP_STATUS);
       setAppUrl(data.appUrl || '');
+      lastServerVersionRef.current = data.updatedAtIso ?? null;
+      lastBgSyncMsRef.current = Date.now();
+      setLastAdminSyncedAt(formatCurrentTimeLabel());
+      setConnectionStatus('connected');
     } catch (err) {
+      if (isColdStartOrNetworkFailure(err)) {
+        setConnectionStatus(isBrowserOffline() ? 'offline' : 'reconnecting');
+      }
       setError(err instanceof Error ? err.message : 'Unable to load master planning data.');
     } finally {
       setLoading(false);
@@ -471,7 +529,7 @@ export default function App() {
     };
   }, [portalRoute, buildHeaders, loadWorkspaceFromServer, setSessionToken]);
 
-  // Stabilize background polling refs so interval isn't recreated on each sync tick
+  // Stabilize background sync refs so 15s background polling interval stays stable without recreating
   const cuttingSyncRefs = useRef({
     lastUpdatedAtIso: cuttingSheetSync.lastUpdatedAtIso,
     lastCheckedAtIso: cuttingSheetSync.lastCheckedAtIso,
@@ -485,47 +543,268 @@ export default function App() {
     records,
   };
 
-  // Periodically check for background server cutting-sheet updates when auto-sync is enabled
+  // Smart 15-second background workspace synchronization + progressive-backoff reconnection (Zero full-page reloads)
   useEffect(() => {
-    if (portalRoute !== 'control_tower' || !adminUnlocked || !cuttingSheetSync.enabled) return;
-    const timer = window.setInterval(async () => {
-      if (syncTimerRef.current) return;
+    if (portalRoute !== 'control_tower' || !adminUnlocked) return;
+    let active = true;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      reconnectAttemptRef.current = 0;
+      setRetryInSeconds(null);
+    };
+
+    const hasActiveUnsavedWork = (): boolean => {
+      if (pendingLocalChangesRef.current || syncTimerRef.current !== null) {
+        return true;
+      }
+      if (typeof document !== 'undefined') {
+        const el = document.activeElement;
+        if (
+          el instanceof HTMLInputElement ||
+          el instanceof HTMLTextAreaElement ||
+          el instanceof HTMLSelectElement
+        ) {
+          // Do not overwrite fields while Admin is actively typing/editing inside the workspace
+          return Boolean(el.closest('main'));
+        }
+      }
+      return false;
+    };
+
+    const scheduleReconnectBackoff = () => {
+      if (!active || reconnectTimerRef.current !== null || reconnectInFlightRef.current) return;
+      if (isBrowserOffline()) {
+        setConnectionStatus('offline');
+        setRetryInSeconds(null);
+        return;
+      }
+
+      const delayMs = getProgressiveBackoffDelayMs(reconnectAttemptRef.current);
+      setConnectionStatus('reconnecting');
+      setRetryInSeconds(Math.max(1, Math.ceil(delayMs / 1000)));
+
+      reconnectTimerRef.current = window.setTimeout(async () => {
+        reconnectTimerRef.current = null;
+        if (!active) return;
+        if (isBrowserOffline()) {
+          setConnectionStatus('offline');
+          setRetryInSeconds(null);
+          return;
+        }
+        if (reconnectInFlightRef.current) return;
+
+        reconnectInFlightRef.current = true;
+        setRetryInSeconds(null);
+        let healthy = false;
+        try {
+          healthy = await probeServerHealth();
+        } finally {
+          reconnectInFlightRef.current = false;
+        }
+        if (!active) return;
+
+        if (healthy) {
+          clearReconnectTimer();
+          void runAdminBackgroundSync(true);
+        } else {
+          reconnectAttemptRef.current += 1;
+          scheduleReconnectBackoff();
+        }
+      }, delayMs);
+    };
+
+    const runAdminBackgroundSync = async (forceCheck = false) => {
+      if (!active || bgSyncInFlightRef.current) return;
+      if (isBrowserOffline()) {
+        setConnectionStatus('offline');
+        return;
+      }
+      if (
+        !forceCheck &&
+        Date.now() - lastBgSyncMsRef.current < SYNC_FOCUS_COOLDOWN_MS
+      ) {
+        return;
+      }
+
+      // Preserve unsaved Admin inputs / debounced saves without cancelling background health
+      if (hasActiveUnsavedWork()) {
+        return;
+      }
+
+      bgSyncInFlightRef.current = true;
+      setConnectionStatus('syncing');
+
+      const controller = new AbortController();
+      let timedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, SYNC_REQUEST_TIMEOUT_MS);
+
       try {
+        // Step 1: Ultra-lightweight Admin version check first (avoids heavy payload downloads when unchanged)
+        const verRes = await fetch(apiUrl('/api/workspace/sync-version'), {
+          credentials: 'include',
+          cache: 'no-store',
+          headers: buildHeaders(false),
+          signal: controller.signal,
+        });
+
+        if (verRes.status === 401 || verRes.status === 403) {
+          setSessionToken(null);
+          setAdminUnlocked(false);
+          clearReconnectTimer();
+          return;
+        }
+        if (!verRes.ok) {
+          throw new HttpStatusError(
+            verRes.status,
+            `Failed workspace sync version check (${verRes.status})`
+          );
+        }
+
+        const verData = (await verRes.json()) as {
+          ok?: boolean;
+          version?: string;
+        };
+        const serverVersion = verData?.version || null;
+
+        if (
+          !forceCheck &&
+          serverVersion &&
+          lastServerVersionRef.current &&
+          serverVersion === lastServerVersionRef.current
+        ) {
+          lastBgSyncMsRef.current = Date.now();
+          setLastAdminSyncedAt(formatCurrentTimeLabel());
+          setConnectionStatus('connected');
+          clearReconnectTimer();
+          return;
+        }
+
+        // Step 2: Re-check unsaved work before fetching & applying updated workspace snapshot
+        if (hasActiveUnsavedWork()) {
+          setConnectionStatus('connected');
+          return;
+        }
+
         const res = await fetch(apiUrl('/api/workspace'), {
           credentials: 'include',
+          cache: 'no-store',
           headers: buildHeaders(false),
+          signal: controller.signal,
         });
-        if (!res.ok) return;
-        const data = (await res.json()) as WorkspaceApiResponse;
-        if (
-          data.cuttingSheetSync &&
-          data.cuttingSheetSync.lastUpdatedAtIso !== cuttingSyncRefs.current.lastUpdatedAtIso
-        ) {
-          setCuttingSheetSync(data.cuttingSheetSync);
-          const nextRecords =
-            Array.isArray(data.records) && data.records.length > 0
-              ? data.records
-              : cuttingSyncRefs.current.records;
-          if (Array.isArray(data.records) && data.records.length > 0) {
-            setRecords(data.records);
-          }
-          if (Array.isArray(data.cuttingEntries)) {
-            setCuttingEntries(data.cuttingEntries);
-            const curMeta = cuttingSyncRefs.current.meta;
-            if (curMeta) saveLocalBackup(curMeta, nextRecords, data.cuttingEntries);
-          }
-        } else if (
-          data.cuttingSheetSync &&
-          data.cuttingSheetSync.lastCheckedAtIso !== cuttingSyncRefs.current.lastCheckedAtIso
-        ) {
-          setCuttingSheetSync(data.cuttingSheetSync);
+
+        if (res.status === 401 || res.status === 403) {
+          setSessionToken(null);
+          setAdminUnlocked(false);
+          clearReconnectTimer();
+          return;
         }
-      } catch {
-        // Ignore transient network errors during background poll
+        if (!res.ok) {
+          throw new HttpStatusError(res.status, `Failed workspace sync (${res.status})`);
+        }
+
+        const data = (await res.json()) as WorkspaceApiResponse;
+        if (!active || hasActiveUnsavedWork()) {
+          return;
+        }
+
+        const normalizedRecords = Array.isArray(data.records)
+          ? data.records.map((r) => {
+              const status = (r.orderStatus ??
+                (r.isFinished ? 'Order Closed' : 'Open')) as OrderStatus;
+              const closed = status === 'Order Closed' || Boolean(r.isFinished);
+              return {
+                ...r,
+                orderStatus: status,
+                isFinished: closed,
+                isManualRunning: closed ? false : Boolean(r.isManualRunning),
+              };
+            })
+          : cuttingSyncRefs.current.records;
+
+        if (data.meta) setMeta(data.meta);
+        if (normalizedRecords.length > 0) setRecords(normalizedRecords);
+        if (Array.isArray(data.cuttingEntries)) setCuttingEntries(data.cuttingEntries);
+        if (data.referenceDateIso) setReferenceDateIso(data.referenceDateIso);
+        if (data.siteConfig) setSiteConfig(data.siteConfig);
+        if (data.cuttingSheetSync) setCuttingSheetSync(data.cuttingSheetSync);
+        if (data.reminders) setReminders(data.reminders);
+        if (data.smtpStatus) setSmtpStatus(data.smtpStatus);
+        setHasCustomEdits(Boolean(data.hasCustomEdits));
+
+        const activeMeta = data.meta || cuttingSyncRefs.current.meta;
+        if (activeMeta && normalizedRecords.length > 0) {
+          saveLocalBackup(
+            activeMeta,
+            normalizedRecords,
+            Array.isArray(data.cuttingEntries) ? data.cuttingEntries : []
+          );
+        }
+
+        lastServerVersionRef.current = data.updatedAtIso ?? serverVersion;
+        lastBgSyncMsRef.current = Date.now();
+        setLastAdminSyncedAt(formatCurrentTimeLabel());
+        setConnectionStatus('connected');
+        clearReconnectTimer();
+      } catch (err) {
+        if (controller.signal.aborted && !timedOut) return;
+        if (!active) return;
+        if (isColdStartOrNetworkFailure(err)) {
+          if (isBrowserOffline()) {
+            setConnectionStatus('offline');
+          } else {
+            scheduleReconnectBackoff();
+          }
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+        bgSyncInFlightRef.current = false;
       }
-    }, 60_000);
-    return () => window.clearInterval(timer);
-  }, [cuttingSheetSync.enabled, buildHeaders, saveLocalBackup]);
+    };
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void runAdminBackgroundSync(false);
+      }
+    }, BACKGROUND_SYNC_INTERVAL_MS);
+
+    const handleFocusOrVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void runAdminBackgroundSync(false);
+      }
+    };
+
+    const handleOnline = () => {
+      clearReconnectTimer();
+      void runAdminBackgroundSync(true);
+    };
+
+    const handleOffline = () => {
+      clearReconnectTimer();
+      setConnectionStatus('offline');
+    };
+
+    window.addEventListener('focus', handleFocusOrVisibility);
+    document.addEventListener('visibilitychange', handleFocusOrVisibility);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', handleFocusOrVisibility);
+      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      clearReconnectTimer();
+    };
+  }, [portalRoute, adminUnlocked, buildHeaders, saveLocalBackup, setSessionToken]);
 
   const isEditingLocked = !adminUnlocked;
 
@@ -637,6 +916,7 @@ export default function App() {
       setHasCustomEdits(true);
 
       try {
+        pendingLocalChangesRef.current = true;
         const res = await fetch(apiUrl('/api/packing'), {
           method: 'PATCH',
           credentials: 'include',
@@ -644,16 +924,30 @@ export default function App() {
           body: JSON.stringify({ recordIds: cleanIds, packingQty: sanitized }),
         });
         if (res.status === 401 || res.status === 403) {
+          pendingLocalChangesRef.current = false;
           setAdminUnlocked(false);
           setSessionToken(null);
           promptAdminSignIn('Admin session expired. Sign in again to save Packing Qty.');
           return;
         }
         if (!res.ok) {
+          pendingLocalChangesRef.current = false;
           const errPayload = (await res.json().catch(() => null)) as { error?: string } | null;
           setBannerMessage(errPayload?.error || 'Unable to save Packing Qty to server.');
+          return;
         }
+        const okPayload = (await res.json().catch(() => null)) as {
+          updatedAtIso?: string;
+        } | null;
+        if (okPayload?.updatedAtIso) {
+          lastServerVersionRef.current = okPayload.updatedAtIso;
+        }
+        pendingLocalChangesRef.current = false;
+        lastBgSyncMsRef.current = Date.now();
+        setLastAdminSyncedAt(formatCurrentTimeLabel());
+        setConnectionStatus('connected');
       } catch (err) {
+        pendingLocalChangesRef.current = false;
         console.error('Failed to persist Admin packing qty:', err);
       }
     },
@@ -2111,6 +2405,12 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <ConnectionStatusBadge
+              status={connectionStatus}
+              lastSyncedAt={lastAdminSyncedAt}
+              retryInSeconds={retryInSeconds}
+            />
+
             <button
               type="button"
               onClick={() => {
