@@ -1714,7 +1714,13 @@ export default function App() {
     patch: Partial<
       Pick<
         CuttingSheetSyncConfig,
-        'enabled' | 'sheetUrl' | 'factoryUrls' | 'syncMode' | 'intervalMinutes'
+        | 'enabled'
+        | 'sheetUrl'
+        | 'factoryUrls'
+        | 'packingSheetUrl'
+        | 'packingFactoryUrls'
+        | 'syncMode'
+        | 'intervalMinutes'
       >
     >
   ): Promise<{ ok: boolean; error?: string }> => {

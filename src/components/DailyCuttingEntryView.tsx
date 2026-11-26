@@ -42,7 +42,13 @@ interface DailyCuttingEntryViewProps {
     patch: Partial<
       Pick<
         CuttingSheetSyncConfig,
-        'enabled' | 'sheetUrl' | 'factoryUrls' | 'syncMode' | 'intervalMinutes'
+        | 'enabled'
+        | 'sheetUrl'
+        | 'factoryUrls'
+        | 'packingSheetUrl'
+        | 'packingFactoryUrls'
+        | 'syncMode'
+        | 'intervalMinutes'
       >
     >
   ) => Promise<{ ok: boolean; error?: string }>;
@@ -84,11 +90,17 @@ export function DailyCuttingEntryView({
   onUpdatePackingQty,
   onSetRunningStyle,
 }: DailyCuttingEntryViewProps) {
-  // Online Cutting Sheet Sync draft state
+  // Online Cutting & Packing Sheet Sync draft state
   const [sheetEnabled, setSheetEnabled] = useState(cuttingSheetSync.enabled);
   const [sheetUrlInput, setSheetUrlInput] = useState(cuttingSheetSync.sheetUrl);
   const [factoryUrlsInput, setFactoryUrlsInput] = useState<FactorySheetUrlMap>(
     cuttingSheetSync.factoryUrls || {}
+  );
+  const [packingSheetUrlInput, setPackingSheetUrlInput] = useState(
+    cuttingSheetSync.packingSheetUrl || ''
+  );
+  const [packingFactoryUrlsInput, setPackingFactoryUrlsInput] = useState<FactorySheetUrlMap>(
+    cuttingSheetSync.packingFactoryUrls || {}
   );
   const [syncModeInput, setSyncModeInput] = useState<CuttingSheetSyncMode>(
     cuttingSheetSync.syncMode
@@ -98,6 +110,14 @@ export function DailyCuttingEntryView({
   );
   const [showMainUrl, setShowMainUrl] = useState<boolean>(() =>
     Boolean(cuttingSheetSync.sheetUrl.trim())
+  );
+  const [showPackingUrls, setShowPackingUrls] = useState<boolean>(() =>
+    Boolean(
+      (cuttingSheetSync.packingSheetUrl || '').trim() ||
+        ALLOWED_FACTORIES.some((fac) =>
+          Boolean((cuttingSheetSync.packingFactoryUrls?.[fac] || '').trim())
+        )
+    )
   );
   const [showSyncLogs, setShowSyncLogs] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -111,15 +131,27 @@ export function DailyCuttingEntryView({
     setSheetEnabled(cuttingSheetSync.enabled);
     setSheetUrlInput(cuttingSheetSync.sheetUrl);
     setFactoryUrlsInput(cuttingSheetSync.factoryUrls || {});
+    setPackingSheetUrlInput(cuttingSheetSync.packingSheetUrl || '');
+    setPackingFactoryUrlsInput(cuttingSheetSync.packingFactoryUrls || {});
     setSyncModeInput(cuttingSheetSync.syncMode);
     setIntervalInput(cuttingSheetSync.intervalMinutes || 60);
     if (cuttingSheetSync.sheetUrl.trim()) {
       setShowMainUrl(true);
     }
+    if (
+      (cuttingSheetSync.packingSheetUrl || '').trim() ||
+      ALLOWED_FACTORIES.some((fac) =>
+        Boolean((cuttingSheetSync.packingFactoryUrls?.[fac] || '').trim())
+      )
+    ) {
+      setShowPackingUrls(true);
+    }
   }, [
     cuttingSheetSync.enabled,
     cuttingSheetSync.sheetUrl,
     cuttingSheetSync.factoryUrls,
+    cuttingSheetSync.packingSheetUrl,
+    cuttingSheetSync.packingFactoryUrls,
     cuttingSheetSync.syncMode,
     cuttingSheetSync.intervalMinutes,
   ]);
@@ -182,8 +214,10 @@ export function DailyCuttingEntryView({
   const hasAnyDraftUrl = useMemo(
     () =>
       Boolean(sheetUrlInput.trim()) ||
-      ALLOWED_FACTORIES.some((fac) => Boolean((factoryUrlsInput[fac] || '').trim())),
-    [sheetUrlInput, factoryUrlsInput]
+      Boolean(packingSheetUrlInput.trim()) ||
+      ALLOWED_FACTORIES.some((fac) => Boolean((factoryUrlsInput[fac] || '').trim())) ||
+      ALLOWED_FACTORIES.some((fac) => Boolean((packingFactoryUrlsInput[fac] || '').trim())),
+    [sheetUrlInput, factoryUrlsInput, packingSheetUrlInput, packingFactoryUrlsInput]
   );
 
   const handleSaveSheetSetup = async (overrideEnabled?: boolean) => {
@@ -200,6 +234,8 @@ export function DailyCuttingEntryView({
       enabled: nextEnabled,
       sheetUrl: sheetUrlInput.trim(),
       factoryUrls: factoryUrlsInput,
+      packingSheetUrl: packingSheetUrlInput.trim(),
+      packingFactoryUrls: packingFactoryUrlsInput,
       syncMode: syncModeInput,
       intervalMinutes: intervalInput,
     });
@@ -209,13 +245,13 @@ export function DailyCuttingEntryView({
       setSyncNotice({
         ok: true,
         text: nextEnabled
-          ? 'All factory sheet links saved & daily/periodic Auto-Sync enabled.'
-          : 'Online cutting sheet settings saved (Auto-Sync paused).',
+          ? 'All factory sheet & packing links saved — Auto-Sync enabled.'
+          : 'Online sheet settings saved (Auto-Sync paused).',
       });
     } else {
       setSyncNotice({
         ok: false,
-        text: res.error || 'Could not save online cutting sheet settings.',
+        text: res.error || 'Could not save online sheet settings.',
       });
     }
     return res.ok;
@@ -227,16 +263,21 @@ export function DailyCuttingEntryView({
     const desiredEnabled = hasAnyDraftUrl ? true : sheetEnabled;
     const hasDraftChanges =
       sheetUrlInput.trim() !== cuttingSheetSync.sheetUrl.trim() ||
+      packingSheetUrlInput.trim() !== (cuttingSheetSync.packingSheetUrl || '').trim() ||
       desiredEnabled !== cuttingSheetSync.enabled ||
       syncModeInput !== cuttingSheetSync.syncMode ||
       intervalInput !== cuttingSheetSync.intervalMinutes ||
-      JSON.stringify(factoryUrlsInput) !== JSON.stringify(cuttingSheetSync.factoryUrls || {});
+      JSON.stringify(factoryUrlsInput) !== JSON.stringify(cuttingSheetSync.factoryUrls || {}) ||
+      JSON.stringify(packingFactoryUrlsInput) !==
+        JSON.stringify(cuttingSheetSync.packingFactoryUrls || {});
 
     if (hasDraftChanges) {
       const saved = await onSaveCuttingSheetConfig({
         enabled: desiredEnabled,
         sheetUrl: sheetUrlInput.trim(),
         factoryUrls: factoryUrlsInput,
+        packingSheetUrl: packingSheetUrlInput.trim(),
+        packingFactoryUrls: packingFactoryUrlsInput,
         syncMode: syncModeInput,
         intervalMinutes: intervalInput,
       });
@@ -271,12 +312,14 @@ export function DailyCuttingEntryView({
       const line = rec?.line || `Line ${idx + 1}`;
       const style = (rec?.style || 'Sample Style').replace(/"/g, '""');
       const orderQty = rec?.plannedQty || 45000;
+      const cutInputQty = rec?.cuttingInputQty || 14000;
       const cutQty = rec?.cuttingFinishedQty || 12500;
+      const packQty = rec?.packingQty ?? 11200;
       const targetQty = rec?.dailyTargetQty || 1500;
-      return `${referenceDateIso},${fac},${line},${pg},"${style}",${orderQty},${cutQty},${targetQty},Latest Daily Update`;
+      return `${referenceDateIso},${fac},${line},${pg},"${style}",${orderQty},${cutInputQty},${cutQty},${packQty},${targetQty},Latest Daily Update`;
     });
     const csvContent = [
-      'Date,Factory,Line,PG#,Style,Order Qty,Total Cutting Qty,Daily Target,Remarks',
+      'Date,Factory,Line,PG#,Style,Order Qty,Cutting Input Qty,Total Cutting Qty,Packing Qty,Daily Target,Remarks',
       ...sampleRows,
     ].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -518,7 +561,7 @@ export function DailyCuttingEntryView({
                 </span>
               </div>
               <p className="text-xs text-slate-300 mt-1 max-w-3xl">
-                Supports <strong className="text-white">SharePoint / OneDrive Excel links</strong>, <strong className="text-white">Google Sheets links</strong>, or direct <strong className="text-white">.xlsx / .csv file upload</strong>. Automatically reads PG# follow-up tabs (<code className="text-blue-200">Daily Cutting</code>) as well as standard summary tables across ALEX 1, 3, 5, and 12.
+                Supports <strong className="text-white">SharePoint / OneDrive Excel links</strong>, <strong className="text-white">Google Sheets links</strong>, or direct <strong className="text-white">.xlsx / .csv file upload</strong>. Automatically collects <strong className="text-white">Cutting Input, Cutting Output, Packing Qty, Order Qty, and Daily Target</strong> across ALEX 1, 3, 5, and 12.
               </p>
             </div>
           </div>
@@ -688,20 +731,35 @@ export function DailyCuttingEntryView({
             </div>
           </div>
 
-          {/* Optional Single Combined Sheet Link */}
-          <div className="pt-2 border-t border-slate-800/80 space-y-2">
-            <button
-              type="button"
-              onClick={() => setShowMainUrl((v) => !v)}
-              className="text-xs font-medium text-blue-300 hover:text-blue-200 inline-flex items-center gap-1 cursor-pointer"
-            >
-              {showMainUrl ? (
-                <ChevronUp className="w-3.5 h-3.5" />
-              ) : (
-                <ChevronDown className="w-3.5 h-3.5" />
-              )}
-              <span>Combined Master Cutting Sheet Link (Optional — if 1 file covers all 4 factories)</span>
-            </button>
+          {/* Optional Single Combined Sheet Link + Dedicated Packing Online Sheet Links */}
+          <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
+            <div className="flex flex-wrap items-center gap-4">
+              <button
+                type="button"
+                onClick={() => setShowMainUrl((v) => !v)}
+                className="text-xs font-medium text-blue-300 hover:text-blue-200 inline-flex items-center gap-1 cursor-pointer"
+              >
+                {showMainUrl ? (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+                <span>Combined Master Cutting/Packing Link (Optional — 1 file for all 4 factories)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowPackingUrls((v) => !v)}
+                className="text-xs font-medium text-cyan-300 hover:text-cyan-200 inline-flex items-center gap-1 cursor-pointer"
+              >
+                {showPackingUrls ? (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+                <span>Separate Packing Online Sheet Links (Optional — if Packing is in a separate link)</span>
+              </button>
+            </div>
 
             {showMainUrl && (
               <div className="flex flex-col gap-1">
@@ -716,6 +774,57 @@ export function DailyCuttingEntryView({
                   placeholder="https://...-my.sharepoint.com/:x:/... or https://docs.google.com/spreadsheets/d/..."
                   className="h-9 px-3 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+              </div>
+            )}
+
+            {showPackingUrls && (
+              <div className="bg-slate-900/60 border border-cyan-900/60 rounded-lg p-3 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold text-cyan-200">
+                    Packing Sheet Online Links (Auto-Collected into Packing Qty &amp; Balance to Pack)
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Leave blank if Packing is already a column/tab inside your Cutting links above
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {ALLOWED_FACTORIES.map((fac) => (
+                    <div key={`pack-${fac}`} className="flex flex-col gap-1">
+                      <label
+                        htmlFor={`pack-fac-url-${fac}`}
+                        className="text-[11px] font-medium text-slate-300"
+                      >
+                        {fac} Packing Online Sheet Link
+                      </label>
+                      <input
+                        id={`pack-fac-url-${fac}`}
+                        type="url"
+                        value={packingFactoryUrlsInput[fac] || ''}
+                        onChange={(e) =>
+                          setPackingFactoryUrlsInput((prev) => ({
+                            ...prev,
+                            [fac]: e.target.value,
+                          }))
+                        }
+                        placeholder={`Paste ${fac} Packing SharePoint / Google Sheet URL`}
+                        className="h-8 px-2.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="online-packing-sheet-url" className="text-[11px] font-medium text-slate-300">
+                    Combined All-Factories Packing Sheet Link (Optional)
+                  </label>
+                  <input
+                    id="online-packing-sheet-url"
+                    type="url"
+                    value={packingSheetUrlInput}
+                    onChange={(e) => setPackingSheetUrlInput(e.target.value)}
+                    placeholder="https://docs.google.com/spreadsheets/d/... or SharePoint Packing Excel URL"
+                    className="h-8 px-3 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -808,9 +917,16 @@ export function DailyCuttingEntryView({
               </strong>
             </span>
             <span className="text-slate-300">
-              Synced Qty:{' '}
+              Synced Cut Qty:{' '}
               <strong className="font-mono text-emerald-300">
                 {cuttingSheetSync.lastTotalQty.toLocaleString()} pcs
+              </strong>
+            </span>
+            <span className="text-slate-300">
+              Synced Packing:{' '}
+              <strong className="font-mono text-cyan-300">
+                {(cuttingSheetSync.lastPackingTotalQty ?? 0).toLocaleString()} pcs (
+                {cuttingSheetSync.lastPackingMatchedCount ?? 0})
               </strong>
             </span>
             {cuttingSheetSync.lastCheckedAtIso && (
@@ -834,7 +950,7 @@ export function DailyCuttingEntryView({
 
         <div className="text-[11px] text-slate-300 flex flex-wrap items-center justify-between gap-2">
           <span>
-            Online Link Tip: Works with <strong className="text-white">SharePoint / OneDrive Excel</strong> (<code className="bg-slate-800 px-1.5 py-0.5 rounded text-blue-200">Anyone with the link</code>) and <strong className="text-white">Google Sheets</strong>. Automatically fills <strong className="text-white">PG# Order Qty</strong>, pulls the <strong className="text-white">Latest Updated Total Cutting Qty</strong> per PG#, and updates <strong className="text-white">Daily Target</strong> by latest date.
+            Online Link Tip: Works with <strong className="text-white">SharePoint / OneDrive Excel</strong> (<code className="bg-slate-800 px-1.5 py-0.5 rounded text-blue-200">Anyone with the link</code>) and <strong className="text-white">Google Sheets</strong>. Automatically collects <strong className="text-white">PG# Order Qty, Cutting Input, Cutting Output, Packing Qty,</strong> and <strong className="text-white">Daily Target</strong> from linked sheets.
           </span>
         </div>
 
@@ -933,8 +1049,8 @@ export function DailyCuttingEntryView({
               </span>{' '}
               /day
             </p>
-            <p className="text-[11px] text-amber-800 mt-1">
-              Note: Online Cutting sheet does not provide a separate Packing Qty column — enter Packing Qty below (Admin-only) to update Balance to Pack and Packing Status on the public Master Plan.
+            <p className="text-[11px] text-cyan-800 mt-1">
+              Packing Qty is automatically collected from uploaded/linked online sheets (from Packing columns/tabs or optional separate Packing links above). Admin overrides can also be entered below.
             </p>
           </div>
           <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg text-xs">

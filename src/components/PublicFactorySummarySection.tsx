@@ -219,7 +219,7 @@ export function PublicFactorySummarySection({
                 Cutting &amp; Packing Progress — {selectedFactory}
               </h4>
               <p className="text-[11px] text-slate-500">
-                Live Cutting Output synced from existing sheet · Packing tracked via Control Tower
+                Live Cutting &amp; Packing synced from linked online sheets
                 {cuttingSheetSummary && !cuttingSheetSummary.hasCuttingInputColumn
                   ? ' · Cutting Input column not present in sheet'
                   : ''}
@@ -278,8 +278,8 @@ export function PublicFactorySummarySection({
             </div>
             <div className="text-[10px] text-slate-400">
               {packingEnteredRecords.length > 0
-                ? `${packingEnteredRecords.length} of ${totalOrdersCount} slots entered`
-                : 'Not set in Admin yet'}
+                ? `${packingEnteredRecords.length} of ${totalOrdersCount} slots synced`
+                : 'Awaiting packing sheet sync'}
             </div>
           </div>
 

@@ -1480,6 +1480,8 @@ async function startServer() {
         enabled: boolean;
         sheetUrl: string;
         factoryUrls: FactorySheetUrlMap;
+        packingSheetUrl: string;
+        packingFactoryUrls: FactorySheetUrlMap;
         syncMode: CuttingSheetSyncMode;
         intervalMinutes: number;
       }>;
@@ -1487,7 +1489,14 @@ async function startServer() {
       const patch: Partial<
         Pick<
           CuttingSheetSyncConfig,
-          'enabled' | 'sheetUrl' | 'factoryUrls' | 'syncMode' | 'intervalMinutes' | 'lastContentHash'
+          | 'enabled'
+          | 'sheetUrl'
+          | 'factoryUrls'
+          | 'packingSheetUrl'
+          | 'packingFactoryUrls'
+          | 'syncMode'
+          | 'intervalMinutes'
+          | 'lastContentHash'
         >
       > = {};
 
@@ -1522,6 +1531,35 @@ async function startServer() {
         }
         patch.factoryUrls = cleanFactoryUrls;
         if (urlsChanged) {
+          patch.lastContentHash = '';
+        }
+      }
+      if (typeof body.packingSheetUrl === 'string') {
+        const cleanPackUrl = body.packingSheetUrl.trim();
+        if (cleanPackUrl) {
+          await assertSafeExternalUrl(cleanPackUrl);
+        }
+        patch.packingSheetUrl = cleanPackUrl;
+        if (cleanPackUrl !== (currentCfg.packingSheetUrl || '').trim()) {
+          patch.lastContentHash = '';
+        }
+      }
+      if (body.packingFactoryUrls && typeof body.packingFactoryUrls === 'object') {
+        const cleanPackingFactoryUrls: FactorySheetUrlMap = {};
+        let packUrlsChanged = false;
+        for (const fac of ALLOWED_FACTORIES) {
+          const val = body.packingFactoryUrls[fac];
+          const clean = typeof val === 'string' ? val.trim() : '';
+          if (clean) {
+            await assertSafeExternalUrl(clean);
+            cleanPackingFactoryUrls[fac] = clean;
+          }
+          if (clean !== ((currentCfg.packingFactoryUrls || {})[fac] || '').trim()) {
+            packUrlsChanged = true;
+          }
+        }
+        patch.packingFactoryUrls = cleanPackingFactoryUrls;
+        if (packUrlsChanged) {
           patch.lastContentHash = '';
         }
       }
@@ -2042,7 +2080,11 @@ async function startServer() {
       if (!cfg.enabled) return;
       const hasUrl =
         Boolean(cfg.sheetUrl.trim()) ||
-        Object.values(cfg.factoryUrls || {}).some((v) => typeof v === 'string' && Boolean(v.trim()));
+        Boolean((cfg.packingSheetUrl || '').trim()) ||
+        Object.values(cfg.factoryUrls || {}).some((v) => typeof v === 'string' && Boolean(v.trim())) ||
+        Object.values(cfg.packingFactoryUrls || {}).some(
+          (v) => typeof v === 'string' && Boolean(v.trim())
+        );
       if (!hasUrl) return;
 
       const intervalMs = Math.max(1, cfg.intervalMinutes || 5) * 60_000;

@@ -256,6 +256,13 @@ export function getWorkspaceState(): PersistedWorkspaceData {
             factoryUrls: {
               ...(parsed.cuttingSheetSync?.factoryUrls ?? {}),
             },
+            packingSheetUrl:
+              typeof parsed.cuttingSheetSync?.packingSheetUrl === 'string'
+                ? parsed.cuttingSheetSync.packingSheetUrl
+                : '',
+            packingFactoryUrls: {
+              ...(parsed.cuttingSheetSync?.packingFactoryUrls ?? {}),
+            },
             factoryStatuses: {
               ...(parsed.cuttingSheetSync?.factoryStatuses ?? {}),
             },
@@ -341,6 +348,8 @@ export function getPublicWorkspaceState(isAdmin = false) {
       ...state.cuttingSheetSync,
       sheetUrl: '',
       factoryUrls: {},
+      packingSheetUrl: '',
+      packingFactoryUrls: {},
       lastContentHash: '',
       lastMessage:
         state.cuttingSheetSync.lastStatus === 'Success'
@@ -692,6 +701,12 @@ export function restoreWorkspaceSnapshot(snapshot: {
           factoryUrls: {
             ...(snapshot.cuttingSheetSync.factoryUrls ?? current.cuttingSheetSync.factoryUrls),
           },
+          packingSheetUrl:
+            snapshot.cuttingSheetSync.packingSheetUrl ?? current.cuttingSheetSync.packingSheetUrl,
+          packingFactoryUrls: {
+            ...(snapshot.cuttingSheetSync.packingFactoryUrls ??
+              current.cuttingSheetSync.packingFactoryUrls),
+          },
           factoryStatuses: {
             ...(snapshot.cuttingSheetSync.factoryStatuses ??
               current.cuttingSheetSync.factoryStatuses),
@@ -715,6 +730,10 @@ export function updateCuttingSheetSyncConfig(
       patch.factoryUrls !== undefined
         ? { ...patch.factoryUrls }
         : { ...current.cuttingSheetSync.factoryUrls },
+    packingFactoryUrls:
+      patch.packingFactoryUrls !== undefined
+        ? { ...patch.packingFactoryUrls }
+        : { ...(current.cuttingSheetSync.packingFactoryUrls ?? {}) },
     factoryStatuses:
       patch.factoryStatuses !== undefined
         ? { ...patch.factoryStatuses }
@@ -771,6 +790,7 @@ export function updateRecordsPackingQty(
 }
 
 export interface RecordSheetPatch {
+  primaryRecordId?: string;
   recordIds: string[];
   plannedQty?: number | null;
   dailyTargetQty?: number | null;
@@ -805,8 +825,18 @@ export function applySyncedCuttingEntries(params: {
         foFullQtyReleased?: boolean;
       }
     >();
+    const clearDuplicatePackingIds = new Set<string>();
     for (const upd of params.recordUpdates) {
+      const primaryId = upd.primaryRecordId || upd.recordIds[0];
       for (const rid of upd.recordIds) {
+        const isPrimary = rid === primaryId;
+        if (
+          !isPrimary &&
+          upd.packingQty !== undefined &&
+          upd.packingQty !== null
+        ) {
+          clearDuplicatePackingIds.add(rid);
+        }
         const prev = patchByRecordId.get(rid) ?? {};
         const mergedRemark =
           upd.sheetRemark && upd.sheetRemark.trim()
@@ -822,11 +852,11 @@ export function applySyncedCuttingEntries(params: {
               ? upd.dailyTargetQty
               : prev.dailyTargetQty,
           cuttingInputQty:
-            upd.cuttingInputQty !== undefined && upd.cuttingInputQty !== null
+            isPrimary && upd.cuttingInputQty !== undefined && upd.cuttingInputQty !== null
               ? upd.cuttingInputQty
               : prev.cuttingInputQty,
           packingQty:
-            upd.packingQty !== undefined && upd.packingQty !== null
+            isPrimary && upd.packingQty !== undefined && upd.packingQty !== null
               ? upd.packingQty
               : prev.packingQty,
           sheetRemark: mergedRemark,
@@ -849,14 +879,21 @@ export function applySyncedCuttingEntries(params: {
           upd.cuttingInputQty !== undefined && upd.cuttingInputQty !== null
             ? upd.cuttingInputQty
             : (rec.cuttingInputQty ?? null);
+        const shouldClearDupPack =
+          clearDuplicatePackingIds.has(rec.id) &&
+          (upd.packingQty === undefined || upd.packingQty === null);
         const nextPackingQty =
           upd.packingQty !== undefined && upd.packingQty !== null
             ? upd.packingQty
-            : (rec.packingQty ?? null);
+            : shouldClearDupPack
+              ? null
+              : (rec.packingQty ?? null);
         const nextPackingUpdatedAt =
           upd.packingQty !== undefined && upd.packingQty !== null
             ? nowIso
-            : (rec.packingUpdatedAtIso ?? null);
+            : shouldClearDupPack
+              ? null
+              : (rec.packingUpdatedAtIso ?? null);
         const nextRemark =
           upd.sheetRemark !== undefined && upd.sheetRemark.trim()
             ? upd.sheetRemark.trim()
@@ -914,6 +951,10 @@ export function applySyncedCuttingEntries(params: {
 
   const allSheetEntries = nextEntries.filter((e) => e.source === 'sheet');
   const totalSheetQty = allSheetEntries.reduce((sum, e) => sum + e.cuttingQty, 0);
+  const packingEnteredRecords = nextRecords.filter(
+    (r) => r.packingQty !== null && r.packingQty !== undefined
+  );
+  const totalPackingQty = packingEnteredRecords.reduce((sum, r) => sum + (r.packingQty || 0), 0);
 
   const nextLogs = params.logEntry
     ? [params.logEntry, ...current.cuttingSheetSync.logs].slice(0, 30)
@@ -934,6 +975,8 @@ export function applySyncedCuttingEntries(params: {
       params.syncPatch.lastTotalQty !== undefined
         ? params.syncPatch.lastTotalQty
         : totalSheetQty,
+    lastPackingMatchedCount: packingEnteredRecords.length,
+    lastPackingTotalQty: totalPackingQty,
     logs: nextLogs,
   };
 
