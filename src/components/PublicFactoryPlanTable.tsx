@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowUpDown, RotateCcw } from 'lucide-react';
 import { formatDisplayDate } from '../shared/plannerTypes.ts';
 import type {
   FactoryName,
+  OutputStatus,
   PackingStatus,
   PublicMasterPlanRecord,
 } from '../shared/plannerTypes.ts';
@@ -18,6 +19,36 @@ interface PublicFactoryPlanTableProps {
   hasActiveFilters: boolean;
   dateRangeActive: boolean;
   onResetFilters: () => void;
+}
+
+function renderOutputStatusBadge(status: OutputStatus) {
+  if (status === 'Over Output') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-red-300 bg-red-50 text-red-700 font-semibold text-[11px] whitespace-nowrap">
+        <AlertTriangle className="w-3 h-3 shrink-0" />
+        <span>Over Output</span>
+      </span>
+    );
+  }
+  if (status === 'Completed') {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-800 font-semibold text-[11px] whitespace-nowrap">
+        Completed
+      </span>
+    );
+  }
+  if (status === 'In Progress') {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded border border-teal-200 bg-teal-50 text-teal-800 font-semibold text-[11px] whitespace-nowrap">
+        In Progress
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded border border-slate-200 bg-slate-100 text-slate-600 font-medium text-[11px] whitespace-nowrap">
+      Not Started
+    </span>
+  );
 }
 
 function renderPackingStatusBadge(status: PackingStatus) {
@@ -362,7 +393,7 @@ export function PublicFactoryPlanTable({
               </div>
 
               <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-                <table className="w-full min-w-[1360px] text-left border-collapse">
+                <table className="w-full min-w-[1620px] text-left border-collapse">
                   <thead className="sticky top-0 z-10 bg-slate-900 text-white">
                     <tr className="text-[11px] font-semibold tracking-wide">
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Lifecycle</th>
@@ -371,6 +402,9 @@ export function PublicFactoryPlanTable({
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Planned Qty</th>
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Cutting Input Qty</th>
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Cutting Output Qty</th>
+                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Output Qty</th>
+                      <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Balance to Output</th>
+                      <th className="py-2.5 px-3.5 whitespace-nowrap">Output Status</th>
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Packing Qty</th>
                       <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Balance to Pack</th>
                       <th className="py-2.5 px-3.5 whitespace-nowrap">Packing Status</th>
@@ -437,6 +471,35 @@ export function PublicFactoryPlanTable({
                         </td>
                         <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
                           {rec.cuttingOutputQty.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap">
+                          {rec.outputQty !== null ? (
+                            <span className="font-semibold text-emerald-700">
+                              {rec.outputQty.toLocaleString()}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-sans text-slate-400">Not set</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap">
+                          {rec.balanceToOutput !== null ? (
+                            <span
+                              className={`font-semibold ${
+                                rec.balanceToOutput < 0
+                                  ? 'text-red-700'
+                                  : rec.balanceToOutput === 0
+                                    ? 'text-emerald-700'
+                                    : 'text-slate-800'
+                              }`}
+                            >
+                              {rec.balanceToOutput.toLocaleString()}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3.5 whitespace-nowrap">
+                          {renderOutputStatusBadge(rec.outputStatus)}
                         </td>
                         <td className="py-2.5 px-3.5 text-right font-mono tabular-nums whitespace-nowrap">
                           {rec.packingQty !== null ? (
@@ -510,7 +573,7 @@ export function PublicFactoryPlanTable({
       ) : (
         <div className="ct-surface rounded-2xl overflow-hidden">
           <div className="overflow-x-auto max-h-[68vh] overflow-y-auto">
-            <table className="w-full min-w-[1460px] text-left border-collapse">
+            <table className="w-full min-w-[1720px] text-left border-collapse">
               <thead className="sticky top-0 z-10 bg-slate-900 text-white">
                 <tr className="text-[11px] font-semibold tracking-wide">
                   <th className="py-3 px-3.5 whitespace-nowrap">Line · Zone</th>
@@ -521,6 +584,9 @@ export function PublicFactoryPlanTable({
                   <th className="py-3 px-3 text-right whitespace-nowrap">Planned Qty</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Cutting Input Qty</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Cutting Output Qty</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Output Qty</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Balance to Output</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Output Status</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Packing Qty</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Balance to Pack</th>
                   <th className="py-3 px-3 whitespace-nowrap">Packing Status</th>
@@ -594,6 +660,35 @@ export function PublicFactoryPlanTable({
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
                       {rec.cuttingOutputQty.toLocaleString()}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                      {rec.outputQty !== null ? (
+                        <span className="font-semibold text-emerald-700">
+                          {rec.outputQty.toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-sans text-slate-400">Not set</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                      {rec.balanceToOutput !== null ? (
+                        <span
+                          className={`font-semibold ${
+                            rec.balanceToOutput < 0
+                              ? 'text-red-700'
+                              : rec.balanceToOutput === 0
+                                ? 'text-emerald-700'
+                                : 'text-slate-800'
+                          }`}
+                        >
+                          {rec.balanceToOutput.toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 whitespace-nowrap">
+                      {renderOutputStatusBadge(rec.outputStatus)}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
                       {rec.packingQty !== null ? (

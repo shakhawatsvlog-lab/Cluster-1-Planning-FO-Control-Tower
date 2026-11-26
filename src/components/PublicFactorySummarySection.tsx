@@ -66,7 +66,7 @@ export function PublicFactorySummarySection({
   const minEndDateIso = endDates[0] ?? null;
   const maxEndDateIso = endDates.length > 0 ? endDates[endDates.length - 1] : null;
 
-  // Scoped Cutting & Packing Summary
+  // Scoped Cutting, Output & Packing Summary
   const cuttingInputRecords = sourceRecords.filter(
     (r) => r.cuttingInputQty !== null && r.cuttingInputQty !== undefined
   );
@@ -78,6 +78,20 @@ export function PublicFactorySummarySection({
     (sum, r) => sum + (r.cuttingOutputQty || 0),
     0
   );
+
+  const outputEnteredRecords = sourceRecords.filter(
+    (r) => r.outputQty !== null && r.outputQty !== undefined
+  );
+  const totalOutputQty = sourceRecords.reduce((sum, r) => sum + (r.outputQty || 0), 0);
+  const hasAnyOutputBalanceScope = totalCuttingOutputQty > 0 || outputEnteredRecords.length > 0;
+  const totalBalanceToOutput = totalCuttingOutputQty - totalOutputQty;
+  const rawOutputPct =
+    totalCuttingOutputQty > 0
+      ? Math.round((totalOutputQty / totalCuttingOutputQty) * 100)
+      : 0;
+  const clampedOutputBarPct = Math.min(100, Math.max(0, rawOutputPct));
+  const overOutputCount = sourceRecords.filter((r) => r.outputStatus === 'Over Output').length;
+
   const packingEnteredRecords = sourceRecords.filter(
     (r) => r.packingQty !== null && r.packingQty !== undefined
   );
@@ -207,7 +221,7 @@ export function PublicFactorySummarySection({
         </div>
       </div>
 
-      {/* Cutting & Packing Progress Panel */}
+      {/* Cutting, Output & Packing Progress Panel */}
       <div className="ct-surface rounded-2xl p-4 sm:p-5 space-y-3.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -216,10 +230,10 @@ export function PublicFactorySummarySection({
             </span>
             <div>
               <h4 className="font-display text-sm font-semibold text-slate-950">
-                Cutting &amp; Packing Progress — {selectedFactory}
+                Cutting, Output &amp; Packing Progress — {selectedFactory}
               </h4>
               <p className="text-[11px] text-slate-500">
-                Live Cutting &amp; Packing synced from linked online sheets
+                Live Cutting, Output &amp; Packing synced from linked online sheets
                 {cuttingSheetSummary && !cuttingSheetSummary.hasCuttingInputColumn
                   ? ' · Cutting Input column not present in sheet'
                   : ''}
@@ -237,6 +251,12 @@ export function PublicFactorySummarySection({
             <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono tabular-nums">
               Not Started: {notStartedPackCount}
             </span>
+            {overOutputCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-50 border border-red-300 text-red-700 font-mono tabular-nums">
+                <AlertTriangle className="w-3 h-3" />
+                Over Output: {overOutputCount}
+              </span>
+            )}
             {overPackedCount > 0 && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-50 border border-red-300 text-red-700 font-mono tabular-nums">
                 <AlertTriangle className="w-3 h-3" />
@@ -246,7 +266,7 @@ export function PublicFactorySummarySection({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 items-center">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 items-stretch">
           <div className="rounded-xl bg-slate-50/90 border border-slate-200/80 px-3.5 py-2.5">
             <div className="text-[11px] font-medium text-slate-500">Cutting Input Qty</div>
             <div className="font-mono tabular-nums text-base font-bold text-slate-900 mt-0.5">
@@ -267,6 +287,36 @@ export function PublicFactorySummarySection({
             <div className="text-[10px] text-slate-400">
               {totalCuttingOutputQty > 0 ? 'Live cutting total' : 'Awaiting cutting sync'}
             </div>
+          </div>
+
+          <div className="rounded-xl bg-slate-50/90 border border-slate-200/80 px-3.5 py-2.5">
+            <div className="text-[11px] font-medium text-slate-500">Output Qty</div>
+            <div className="font-mono tabular-nums text-base font-bold text-emerald-700 mt-0.5">
+              {outputEnteredRecords.length > 0 || totalOutputQty > 0
+                ? `${totalOutputQty.toLocaleString()} pcs`
+                : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">
+              {outputEnteredRecords.length > 0
+                ? `${outputEnteredRecords.length} of ${totalOrdersCount} slots synced`
+                : 'Awaiting output sheet sync'}
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-slate-50/90 border border-slate-200/80 px-3.5 py-2.5">
+            <div className="text-[11px] font-medium text-slate-500">Balance to Output</div>
+            <div
+              className={`font-mono tabular-nums text-base font-bold mt-0.5 ${
+                hasAnyOutputBalanceScope && totalBalanceToOutput < 0
+                  ? 'text-red-700'
+                  : hasAnyOutputBalanceScope && totalBalanceToOutput === 0
+                    ? 'text-emerald-700'
+                    : 'text-slate-900'
+              }`}
+            >
+              {hasAnyOutputBalanceScope ? `${totalBalanceToOutput.toLocaleString()} pcs` : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">Cutting Output − Output Qty</div>
           </div>
 
           <div className="rounded-xl bg-slate-50/90 border border-slate-200/80 px-3.5 py-2.5">
@@ -299,7 +349,36 @@ export function PublicFactorySummarySection({
             <div className="text-[10px] text-slate-400">Cutting Output − Packing</div>
           </div>
 
-          <div className="col-span-2 lg:col-span-1 rounded-xl bg-slate-50/90 border border-slate-200/80 px-3.5 py-2.5 space-y-1.5">
+          <div className="rounded-xl bg-slate-50/90 border border-slate-200/80 px-3.5 py-2.5 space-y-1.5 flex flex-col justify-center">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-medium text-slate-500">Output Rate</span>
+              <span
+                className={`font-mono tabular-nums font-bold ${
+                  rawOutputPct > 100
+                    ? 'text-red-700'
+                    : rawOutputPct === 100 && totalCuttingOutputQty > 0
+                      ? 'text-emerald-700'
+                      : 'text-teal-800'
+                }`}
+              >
+                {totalCuttingOutputQty > 0 ? `${rawOutputPct}%` : '0%'}
+              </span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  rawOutputPct > 100
+                    ? 'bg-red-600'
+                    : rawOutputPct === 100 && totalCuttingOutputQty > 0
+                      ? 'bg-emerald-600'
+                      : 'bg-gradient-to-r from-teal-600 to-emerald-500'
+                }`}
+                style={{ width: `${clampedOutputBarPct}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-slate-50/90 border border-slate-200/80 px-3.5 py-2.5 space-y-1.5 flex flex-col justify-center">
             <div className="flex items-center justify-between text-[11px]">
               <span className="font-medium text-slate-500">Packing Rate</span>
               <span

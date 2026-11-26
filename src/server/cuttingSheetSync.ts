@@ -385,7 +385,7 @@ export interface ParsedSheetResult {
   detectedLayout: 'daily_rows' | 'date_matrix' | 'cumulative_pg' | 'pg_tabs_xlsx';
 }
 
-export type SheetSyncRole = 'cutting' | 'packing';
+export type SheetSyncRole = 'cutting' | 'output' | 'packing';
 
 export function parseSheetRowsMatrix(params: {
   rows: string[][];
@@ -406,6 +406,8 @@ export function parseSheetRowsMatrix(params: {
     sheetRole = 'cutting',
   } = params;
   const isPackingOnlyRole = sheetRole === 'packing';
+  const isOutputOnlyRole = sheetRole === 'output';
+  const isMetricOnlyRole = isPackingOnlyRole || isOutputOnlyRole;
   const fallbackYear = Number(referenceDateIso.slice(0, 4)) || new Date().getFullYear();
 
   if (rows.length < 2) {
@@ -438,7 +440,7 @@ export function parseSheetRowsMatrix(params: {
     const joined = rows[i].map(normalizeHeader).join(' | ');
     if (
       /\bpg\b|pg#|pg no|pg number|\bp\s*g\b/.test(joined) &&
-      (/cut|pack|packed|packing|finish|carton|ctn|poly|qty|pcs|total|ttl|factory|unit|date|line|target|fo/.test(
+      (/cut|pack|packed|packing|output|sew|sewing|prod|production|finish|carton|ctn|poly|qty|pcs|total|ttl|factory|unit|date|line|target|fo/.test(
         joined
       ) ||
         rows[i].some((c) => parseFlexibleSheetDate(c, fallbackYear) !== null))
@@ -472,6 +474,9 @@ export function parseSheetRowsMatrix(params: {
   const colDate = findCol([
     /^date$/,
     /cutting date/,
+    /output date/,
+    /sewing date/,
+    /prod date/,
     /packing date/,
     /pack date/,
     /cut date/,
@@ -506,7 +511,7 @@ export function parseSheetRowsMatrix(params: {
       (x) => x !== -1
     )
   );
-  let colQty = isPackingOnlyRole
+  let colQty = isMetricOnlyRole
     ? -1
     : findCol(
         [
@@ -526,7 +531,7 @@ export function parseSheetRowsMatrix(params: {
         ],
         reservedCols
       );
-  const colCuttingInput = isPackingOnlyRole
+  const colCuttingInput = isMetricOnlyRole
     ? -1
     : findCol(
         [
@@ -540,7 +545,7 @@ export function parseSheetRowsMatrix(params: {
         ],
         new Set([...reservedCols, colQty].filter((x) => x !== -1))
       );
-  if (!isPackingOnlyRole && colQty === -1 && colCuttingInput !== -1 && /ttl\s*input/.test(normHeaders[colCuttingInput])) {
+  if (!isMetricOnlyRole && colQty === -1 && colCuttingInput !== -1 && /ttl\s*input/.test(normHeaders[colCuttingInput])) {
     // Preserve backward compatibility when a sheet only provides a "TTL Input" cutting column
     colQty = colCuttingInput;
   }
@@ -575,12 +580,14 @@ export function parseSheetRowsMatrix(params: {
     /^pack$/,
     /^pack\s*-\s*till$/,
   ];
-  let colPackingQty = normHeaders.findIndex(
-    (h, idx) =>
-      !packingExclude.has(idx) &&
-      !isExcludedPackingHeader(h) &&
-      packingPatterns.some((p) => p.test(h))
-  );
+  let colPackingQty = isOutputOnlyRole
+    ? -1
+    : normHeaders.findIndex(
+        (h, idx) =>
+          !packingExclude.has(idx) &&
+          !isExcludedPackingHeader(h) &&
+          packingPatterns.some((p) => p.test(h))
+      );
   if (colPackingQty === -1 && isPackingOnlyRole) {
     // In a dedicated Packing sheet link, accept generic Qty / Output / Finished columns as Packing Qty
     const genericPackExclude = new Set(
@@ -596,34 +603,86 @@ export function parseSheetRowsMatrix(params: {
     );
   }
 
+  const isExcludedOutputHeader = (h: string): boolean =>
+    /\b(bal|balance|remain|remaining|left|due|short|excess|rate|percent|pct|status|target|plan|cut|cutting|pack|packing|packed|est|start|date)\b/.test(
+      h
+    );
+  const outputExclude = new Set(
+    [...reservedCols, colQty, colCuttingInput, colPackingQty].filter((x) => x !== -1)
+  );
+  const outputPatterns: RegExp[] = [
+    /sewing\s*output/,
+    /sewing\s*qty/,
+    /sew\s*output/,
+    /sew\s*qty/,
+    /line\s*output/,
+    /prod(?:uction)?\s*output/,
+    /prod(?:uction)?\s*qty/,
+    /output\s*qty/,
+    /output\s*pcs/,
+    /ttl\s*(?:sewing\s*|prod(?:uction)?\s*)?output/,
+    /total\s*(?:sewing\s*|prod(?:uction)?\s*)?output/,
+    /cum(?:ulative)?\s*(?:sewing\s*|prod(?:uction)?\s*)?output/,
+    /output\s*till/,
+    /today.*output/,
+    /daily.*output/,
+    /today.*sew/,
+    /daily.*sew/,
+    /^output$/,
+    /^sew(?:ing)?$/,
+    /^output\s*-\s*till$/,
+  ];
+  let colOutputQty = isPackingOnlyRole
+    ? -1
+    : normHeaders.findIndex(
+        (h, idx) =>
+          !outputExclude.has(idx) &&
+          !isExcludedOutputHeader(h) &&
+          outputPatterns.some((p) => p.test(h))
+      );
+  if (colOutputQty === -1 && isOutputOnlyRole) {
+    // In a dedicated Output sheet link, accept generic Qty / Output / Finished columns as Output Qty
+    const genericOutputExclude = new Set(
+      [colFactory, colLine, colPg, colStyle, colDate, colDailyTarget].filter((x) => x !== -1)
+    );
+    colOutputQty = normHeaders.findIndex(
+      (h, idx) =>
+        !genericOutputExclude.has(idx) &&
+        !isExcludedPackingHeader(h) &&
+        [/^qty$/, /^pcs$/, /^output$/, /^total\s*qty$/, /^ttl\s*qty$/, /^finished\s*qty$/, /^daily\s*qty$/, /^today\s*qty$/, /^ttl$/, /^total$/].some(
+          (p) => p.test(h)
+        )
+    );
+  }
+
   let colOrderQty = colOrderQtyExplicit;
-  if (!isPackingOnlyRole) {
+  if (!isMetricOnlyRole) {
     if (colOrderQty === -1 && colQty !== -1) {
       colOrderQty = findCol(
         [/^qty$/],
-        new Set([...reservedCols, colQty, colCuttingInput, colPackingQty].filter((x) => x !== -1))
+        new Set([...reservedCols, colQty, colCuttingInput, colOutputQty, colPackingQty].filter((x) => x !== -1))
       );
     } else if (colQty === -1) {
       colQty = findCol(
         [/^qty$/],
-        new Set([...reservedCols, colCuttingInput, colPackingQty].filter((x) => x !== -1))
+        new Set([...reservedCols, colCuttingInput, colOutputQty, colPackingQty].filter((x) => x !== -1))
       );
     }
-  } else if (colOrderQty === colPackingQty) {
+  } else if (colOrderQty === colPackingQty || colOrderQty === colOutputQty) {
     colOrderQty = -1;
   }
 
-  const colFoStatus = isPackingOnlyRole
+  const colFoStatus = isMetricOnlyRole
     ? -1
     : findCol(
         [/fo\s*status/, /fabric\s*status/, /release\s*status/, /fo\s*remark/, /^fo\s*complete/, /^status$/],
         reservedCols
       );
-  const colRemarks = isPackingOnlyRole
+  const colRemarks = isMetricOnlyRole
     ? -1
     : findCol(
         [/remark/, /summary/, /^note$/, /^notes$/, /comment/, /feedback/, /shift/],
-        new Set([...reservedCols, colQty, colCuttingInput, colPackingQty, colOrderQty].filter((x) => x !== -1))
+        new Set([...reservedCols, colQty, colCuttingInput, colOutputQty, colPackingQty, colOrderQty].filter((x) => x !== -1))
       );
 
   const dateMatrixCols: Array<{ idx: number; dateIso: string }> = [];
@@ -637,6 +696,7 @@ export function parseSheetRowsMatrix(params: {
       idx === colDailyTarget ||
       idx === colQty ||
       idx === colCuttingInput ||
+      idx === colOutputQty ||
       idx === colPackingQty
     ) {
       return;
@@ -649,13 +709,15 @@ export function parseSheetRowsMatrix(params: {
 
   if (colPg === -1) {
     throw new Error(
-      `Could not find a "PG#" column${sheetLabel ? ` in "${sheetLabel}"` : ''}. Make sure the sheet has a header row with PG# and ${isPackingOnlyRole ? 'Packing' : 'Cutting'} Qty.`
+      `Could not find a "PG#" column${sheetLabel ? ` in "${sheetLabel}"` : ''}. Make sure the sheet has a header row with PG# and ${isPackingOnlyRole ? 'Packing' : isOutputOnlyRole ? 'Output' : 'Cutting'} Qty.`
     );
   }
 
   const useMatrix = isPackingOnlyRole
     ? dateMatrixCols.length >= 2 && colPackingQty === -1 && colDate === -1
-    : dateMatrixCols.length >= 2 && (colQty === -1 || syncMode === 'daily_rows') && colDate === -1;
+    : isOutputOnlyRole
+      ? dateMatrixCols.length >= 2 && colOutputQty === -1 && colDate === -1
+      : dateMatrixCols.length >= 2 && (colQty === -1 || syncMode === 'daily_rows') && colDate === -1;
 
   const isCumulativeCol =
     syncMode === 'cumulative_pg' ||
@@ -667,6 +729,12 @@ export function parseSheetRowsMatrix(params: {
     (colCuttingInput !== -1 &&
       /(ttl|total|till|cum|input)/.test(normHeaders[colCuttingInput]) &&
       !/(daily|today)/.test(normHeaders[colCuttingInput]));
+  const isOutputCumulativeCol =
+    colDate !== -1 &&
+    (syncMode === 'cumulative_pg' ||
+      (colOutputQty !== -1 &&
+        /(ttl|total|till|cum|finished|output|sew)/.test(normHeaders[colOutputQty]) &&
+        !/(daily|today)/.test(normHeaders[colOutputQty])));
   const isPackingCumulativeCol =
     colDate !== -1 &&
     (syncMode === 'cumulative_pg' ||
@@ -676,7 +744,12 @@ export function parseSheetRowsMatrix(params: {
 
   const detectedLayout: ParsedSheetResult['detectedLayout'] = useMatrix
     ? 'date_matrix'
-    : colDate !== -1 && !(isPackingOnlyRole ? isPackingCumulativeCol : isCumulativeCol)
+    : colDate !== -1 &&
+        !(isPackingOnlyRole
+          ? isPackingCumulativeCol
+          : isOutputOnlyRole
+            ? isOutputCumulativeCol
+            : isCumulativeCol)
       ? 'daily_rows'
       : 'cumulative_pg';
 
@@ -687,6 +760,8 @@ export function parseSheetRowsMatrix(params: {
     latestCuttingDateIso: string;
     inputByDate: Map<string, number>;
     latestInputDateIso: string;
+    outputByDate: Map<string, number>;
+    latestOutputDateIso: string;
     packingByDate: Map<string, number>;
     latestPackingDateIso: string;
     orderQty: number | null;
@@ -757,6 +832,8 @@ export function parseSheetRowsMatrix(params: {
         latestCuttingDateIso: '',
         inputByDate: new Map<string, number>(),
         latestInputDateIso: '',
+        outputByDate: new Map<string, number>(),
+        latestOutputDateIso: '',
         packingByDate: new Map<string, number>(),
         latestPackingDateIso: '',
         orderQty: null,
@@ -816,6 +893,20 @@ export function parseSheetRowsMatrix(params: {
       }
     }
 
+    if (colOutputQty !== -1) {
+      const outQty = parseNumericCell(row[colOutputQty] || '');
+      if (outQty !== null) {
+        const prevOutVal = grp.outputByDate.get(rowDateIso) ?? 0;
+        grp.outputByDate.set(
+          rowDateIso,
+          isOutputCumulativeCol ? Math.max(prevOutVal, outQty) : prevOutVal + outQty
+        );
+        if (!grp.latestOutputDateIso || rowDateIso > grp.latestOutputDateIso) {
+          grp.latestOutputDateIso = rowDateIso;
+        }
+      }
+    }
+
     if (colPackingQty !== -1) {
       const packQty = parseNumericCell(row[colPackingQty] || '');
       if (packQty !== null) {
@@ -844,6 +935,15 @@ export function parseSheetRowsMatrix(params: {
           );
           if (!grp.latestPackingDateIso || dc.dateIso > grp.latestPackingDateIso) {
             grp.latestPackingDateIso = dc.dateIso;
+          }
+        } else if (isOutputOnlyRole) {
+          const prevOutVal = grp.outputByDate.get(dc.dateIso) ?? 0;
+          grp.outputByDate.set(
+            dc.dateIso,
+            isOutputCumulativeCol ? Math.max(prevOutVal, qty) : prevOutVal + qty
+          );
+          if (!grp.latestOutputDateIso || dc.dateIso > grp.latestOutputDateIso) {
+            grp.latestOutputDateIso = dc.dateIso;
           }
         } else {
           const prevDateVal = grp.cuttingByDate.get(dc.dateIso) ?? 0;
@@ -876,6 +976,7 @@ export function parseSheetRowsMatrix(params: {
         grp.orderQty ||
         grp.dailyTargetQty ||
         grp.inputByDate.size > 0 ||
+        grp.outputByDate.size > 0 ||
         grp.packingByDate.size > 0 ||
         rowRemark ||
         rowFoStatus
@@ -886,6 +987,7 @@ export function parseSheetRowsMatrix(params: {
       grp.orderQty ||
       grp.dailyTargetQty ||
       grp.inputByDate.size > 0 ||
+      grp.outputByDate.size > 0 ||
       grp.packingByDate.size > 0 ||
       rowRemark ||
       rowFoStatus
@@ -897,6 +999,7 @@ export function parseSheetRowsMatrix(params: {
   if (
     colQty === -1 &&
     colCuttingInput === -1 &&
+    colOutputQty === -1 &&
     colPackingQty === -1 &&
     colOrderQty === -1 &&
     colDailyTarget === -1 &&
@@ -905,7 +1008,7 @@ export function parseSheetRowsMatrix(params: {
     dateMatrixCols.length === 0
   ) {
     throw new Error(
-      `Could not find Cutting Qty, Packing Qty, Order Qty, Daily Target, or Remarks columns${sheetLabel ? ` in "${sheetLabel}"` : ''}.`
+      `Could not find Cutting Qty, Output Qty, Packing Qty, Order Qty, Daily Target, or Remarks columns${sheetLabel ? ` in "${sheetLabel}"` : ''}.`
     );
   }
 
@@ -916,7 +1019,7 @@ export function parseSheetRowsMatrix(params: {
   for (const grp of groupedByPrimaryId.values()) {
     const joinedRemark = Array.from(grp.remarks).join(' · ').trim();
     let finalCuttingInputQty: number | null = null;
-    if (!isPackingOnlyRole && grp.inputByDate.size > 0) {
+    if (!isMetricOnlyRole && grp.inputByDate.size > 0) {
       const latestInDate =
         grp.latestInputDateIso || Array.from(grp.inputByDate.keys()).sort().pop() || referenceDateIso;
       if (isInputCumulativeCol) {
@@ -927,8 +1030,20 @@ export function parseSheetRowsMatrix(params: {
         finalCuttingInputQty = sum;
       }
     }
+    let finalOutputQty: number | null = null;
+    if (!isPackingOnlyRole && grp.outputByDate.size > 0) {
+      const latestOutDate =
+        grp.latestOutputDateIso || Array.from(grp.outputByDate.keys()).sort().pop() || referenceDateIso;
+      if (isOutputCumulativeCol) {
+        finalOutputQty = grp.outputByDate.get(latestOutDate) ?? null;
+      } else {
+        let sum = 0;
+        for (const q of grp.outputByDate.values()) sum += q;
+        finalOutputQty = sum;
+      }
+    }
     let finalPackingQty: number | null = null;
-    if (grp.packingByDate.size > 0) {
+    if (!isOutputOnlyRole && grp.packingByDate.size > 0) {
       const latestPackDate =
         grp.latestPackingDateIso || Array.from(grp.packingByDate.keys()).sort().pop() || referenceDateIso;
       if (isPackingCumulativeCol) {
@@ -941,18 +1056,20 @@ export function parseSheetRowsMatrix(params: {
     }
 
     if (
-      (!isPackingOnlyRole && (grp.orderQty !== null || grp.dailyTargetQty !== null || finalCuttingInputQty !== null || joinedRemark.length > 0 || grp.foFullQtyReleased)) ||
+      (!isMetricOnlyRole && (grp.orderQty !== null || grp.dailyTargetQty !== null || finalCuttingInputQty !== null || joinedRemark.length > 0 || grp.foFullQtyReleased)) ||
+      finalOutputQty !== null ||
       finalPackingQty !== null
     ) {
       recordUpdates.push({
         primaryRecordId: grp.primaryRecord.id,
         recordIds: Array.from(grp.allRecordIds),
-        plannedQty: isPackingOnlyRole ? null : grp.orderQty,
-        dailyTargetQty: isPackingOnlyRole ? null : grp.dailyTargetQty,
-        cuttingInputQty: isPackingOnlyRole ? null : finalCuttingInputQty,
+        plannedQty: isMetricOnlyRole ? null : grp.orderQty,
+        dailyTargetQty: isMetricOnlyRole ? null : grp.dailyTargetQty,
+        cuttingInputQty: isMetricOnlyRole ? null : finalCuttingInputQty,
+        outputQty: finalOutputQty,
         packingQty: finalPackingQty,
-        sheetRemark: !isPackingOnlyRole && joinedRemark ? joinedRemark : undefined,
-        foFullQtyReleased: isPackingOnlyRole ? false : grp.foFullQtyReleased,
+        sheetRemark: !isMetricOnlyRole && joinedRemark ? joinedRemark : undefined,
+        foFullQtyReleased: isMetricOnlyRole ? false : grp.foFullQtyReleased,
       });
     }
 
@@ -1100,6 +1217,8 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
     sheetRole = 'cutting',
   } = params;
   const isPackingOnlyRole = sheetRole === 'packing';
+  const isOutputOnlyRole = sheetRole === 'output';
+  const isMetricOnlyRole = isPackingOnlyRole || isOutputOnlyRole;
   const fallbackYear = Number(referenceDateIso.slice(0, 4)) || new Date().getFullYear();
 
   const wb = new ExcelJS.Workbook();
@@ -1150,6 +1269,7 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
       plannedQty: number | null;
       dailyTargetQty: number | null;
       cuttingInputQty: number | null;
+      outputQty: number | null;
       packingQty: number | null;
       remarks: Set<string>;
       foFullQtyReleased: boolean;
@@ -1176,6 +1296,7 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
     let remarkFromMeta = '';
     let releasedFromMeta = false;
 
+    let outputFromMeta: number | null = null;
     let packFromMeta: number | null = null;
     for (let r = 1; r <= Math.min(10, ws.rowCount); r++) {
       const row = ws.getRow(r);
@@ -1190,6 +1311,11 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
       } else if (/per\s*day\s*target|daily\s*target|target\s*\/?\s*day/.test(k)) {
         const tVal = parseNumericCell(v);
         if (tVal) dailyTargetFromMeta = tVal;
+      } else if (
+        /^(output|output\s*qty|sewing\s*output|sew\s*output|prod(?:uction)?\s*output|ttl\s*output|total\s*output|output\s*till)$/.test(k)
+      ) {
+        const oVal = parseNumericCell(v);
+        if (oVal) outputFromMeta = oVal;
       } else if (
         /^(packing|packed|packing\s*qty|packed\s*qty|ttl\s*pack|total\s*pack|pack\s*till)$/.test(k)
       ) {
@@ -1224,26 +1350,31 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
     const pgNumber = pgFromMeta ?? pgFromTabName;
     const extraCodes = extractExtraStyleCodeTokens(`${ws.name} ${styleFromMeta}`);
 
-    // Scan PO table header (Qty, Cut - till, & Pack - till) and Po Data TTL / Daywise date rows
+    // Scan PO table header (Qty, Cut - till, Output - till, & Pack - till) and Po Data TTL / Daywise date rows
     let poHeaderRow = -1;
     let poQtyCol = -1;
     let poCutCol = -1;
+    let poOutCol = -1;
     let poPackCol = -1;
     let poTtlQty: number | null = null;
     let poTtlCut: number | null = null;
+    let poTtlOutput: number | null = null;
     let poTtlPack: number | null = null;
     let daywiseTotalCut: number | null = null;
     let poSumQty = 0;
     let poSumCut = 0;
+    let poSumOutput = 0;
     let poSumPack = 0;
 
-    // Scan Daily Cutting / Packing table header (e.g. "DATE/Line | Daily Cutting | Daily Packing | Daily Target...")
+    // Scan Daily Cutting / Output / Packing table header (e.g. "DATE/Line | Daily Cutting | Daily Output | Daily Packing | Daily Target...")
     let dailyHeaderRow = -1;
     let dailyHeaderIsCumulative = false;
     let dateColIdx = 1;
     let cutColIdx = -1;
     let cutInputColIdx = -1;
     let cutInputIsCumulative = false;
+    let outColIdx = -1;
+    let outIsCumulative = false;
     let packColIdx = -1;
     let packIsCumulative = false;
     let dailyTargetColIdx = -1;
@@ -1262,13 +1393,17 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
         const cCol = cellTexts.findIndex((t) =>
           /^(cut till|cut - till|ttl cut|total cut|cut qty)$/.test(t)
         );
+        const oCol = cellTexts.findIndex((t) =>
+          /^(output till|output - till|ttl output|total output|output qty|sewing output|sew output|output)$/.test(t)
+        );
         const pCol = cellTexts.findIndex((t) =>
           /^(pack till|pack - till|ttl pack|total pack|packing qty|packed qty|packing|packed)$/.test(t)
         );
-        if (qCol !== -1 && (cellTexts.includes('po') || cellTexts.includes('color') || cCol !== -1 || pCol !== -1)) {
+        if (qCol !== -1 && (cellTexts.includes('po') || cellTexts.includes('color') || cCol !== -1 || oCol !== -1 || pCol !== -1)) {
           poHeaderRow = r;
           poQtyCol = qCol + 1;
           poCutCol = cCol !== -1 ? cCol + 1 : -1;
+          poOutCol = oCol !== -1 ? oCol + 1 : -1;
           poPackCol = pCol !== -1 ? pCol + 1 : -1;
         }
       }
@@ -1280,6 +1415,10 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
         const cVal = parseNumericCell(extractExcelCellString(row.getCell(cCol).value));
         if (qVal) poTtlQty = qVal;
         if (cVal) poTtlCut = cVal;
+        if (poOutCol !== -1) {
+          const oVal = parseNumericCell(extractExcelCellString(row.getCell(poOutCol).value));
+          if (oVal) poTtlOutput = oVal;
+        }
         if (poPackCol !== -1) {
           const pVal = parseNumericCell(extractExcelCellString(row.getCell(poPackCol).value));
           if (pVal) poTtlPack = pVal;
@@ -1300,6 +1439,10 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
           const cVal = parseNumericCell(extractExcelCellString(row.getCell(poCutCol).value));
           if (cVal) poSumCut += cVal;
         }
+        if (poOutCol !== -1) {
+          const oVal = parseNumericCell(extractExcelCellString(row.getCell(poOutCol).value));
+          if (oVal) poSumOutput += oVal;
+        }
         if (poPackCol !== -1) {
           const pVal = parseNumericCell(extractExcelCellString(row.getCell(poPackCol).value));
           if (pVal) poSumPack += pVal;
@@ -1307,32 +1450,48 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
       }
 
       if (dailyHeaderRow === -1) {
-        const foundCutCol = isPackingOnlyRole
+        const foundCutCol = isMetricOnlyRole
           ? -1
           : cellTexts.findIndex((t) =>
               /^(daily cutting|daily cut|cutting output|cutting qty|cut qty|total cut|ttl cut|cut till)$/.test(t)
             );
-        const foundInputCol = isPackingOnlyRole
+        const foundInputCol = isMetricOnlyRole
           ? -1
           : cellTexts.findIndex((t, idx) =>
               idx !== foundCutCol &&
               /^(cutting input|cut input|ttl input|total input|input qty|daily input)$/.test(t)
             );
-        const foundPackCol = cellTexts.findIndex(
-          (t, idx) =>
-            idx !== foundCutCol &&
-            idx !== foundInputCol &&
-            !/\b(bal|balance|remain|remaining|left|due|short|excess|rate|percent|pct|status|target|plan)\b/.test(
-              t
-            ) &&
-            /^(packing qty|packed qty|pack qty|packing output|pack output|ttl pack|total pack|packing till|pack till|packed till|pack finished|finished pack|packing|packed|pack|daily packing|today packing|daily pack|today pack)$/.test(
-              t
-            )
-        );
+        const foundPackCol = isOutputOnlyRole
+          ? -1
+          : cellTexts.findIndex(
+              (t, idx) =>
+                idx !== foundCutCol &&
+                idx !== foundInputCol &&
+                !/\b(bal|balance|remain|remaining|left|due|short|excess|rate|percent|pct|status|target|plan)\b/.test(
+                  t
+                ) &&
+                /^(packing qty|packed qty|pack qty|packing output|pack output|ttl pack|total pack|packing till|pack till|packed till|pack finished|finished pack|packing|packed|pack|daily packing|today packing|daily pack|today pack)$/.test(
+                  t
+                )
+            );
+        const foundOutCol = isPackingOnlyRole
+          ? -1
+          : cellTexts.findIndex(
+              (t, idx) =>
+                idx !== foundCutCol &&
+                idx !== foundInputCol &&
+                idx !== foundPackCol &&
+                !/\b(bal|balance|remain|remaining|left|due|short|excess|rate|percent|pct|status|target|plan|cut|cutting|pack|packing|packed)\b/.test(
+                  t
+                ) &&
+                /^(output qty|sewing output|sew output|sewing qty|sew qty|line output|production output|prod output|ttl output|total output|output till|output|sewing|daily output|today output|daily sewing|today sewing)$/.test(
+                  t
+                )
+            );
         const foundDateCol = cellTexts.findIndex(
           (t) => t === 'date' || t === 'date line' || t.startsWith('date ')
         );
-        if ((foundCutCol !== -1 || foundPackCol !== -1) && (foundDateCol !== -1 || r > 15)) {
+        if ((foundCutCol !== -1 || foundOutCol !== -1 || foundPackCol !== -1) && (foundDateCol !== -1 || r > 15)) {
           dailyHeaderRow = r;
           cutColIdx = foundCutCol !== -1 ? foundCutCol + 1 : -1;
           dateColIdx = foundDateCol !== -1 ? foundDateCol + 1 : 1;
@@ -1346,6 +1505,13 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
           if (foundInputCol !== -1) {
             cutInputColIdx = foundInputCol + 1;
             cutInputIsCumulative = /(ttl|total|till|cum)/.test(cellTexts[foundInputCol]);
+          }
+
+          if (foundOutCol !== -1) {
+            outColIdx = foundOutCol + 1;
+            outIsCumulative =
+              /(ttl|total|till|cum|finished)/.test(cellTexts[foundOutCol]) &&
+              !/(daily|today)/.test(cellTexts[foundOutCol]);
           }
 
           if (foundPackCol !== -1) {
@@ -1364,6 +1530,7 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
         poHeaderRow !== -1 ||
         poTtlQty !== null ||
         dailyTargetFromMeta !== null ||
+        outputFromMeta !== null ||
         packFromMeta !== null);
 
     if (isPgTab && (pgNumber || extraCodes.length > 0)) {
@@ -1377,6 +1544,10 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
       let latestInputOnMaxDate = 0;
       let maxInputDate = '';
       let hasInputData = false;
+      let sumDailyOutput = 0;
+      let latestOutputOnMaxDate = 0;
+      let maxOutputDate = '';
+      let hasOutputData = false;
       let sumDailyPack = 0;
       let latestPackOnMaxDate = 0;
       let maxPackDate = '';
@@ -1384,14 +1555,14 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
       let latestTargetFromRows: number | null = null;
       let latestTargetDate = '';
 
-      if (dailyHeaderRow !== -1 && (cutColIdx !== -1 || packColIdx !== -1)) {
+      if (dailyHeaderRow !== -1 && (cutColIdx !== -1 || outColIdx !== -1 || packColIdx !== -1)) {
         for (let r = dailyHeaderRow + 1; r <= ws.rowCount; r++) {
           const row = ws.getRow(r);
           const dateStr = extractExcelCellString(row.getCell(dateColIdx).value);
           const dateIso = parseFlexibleSheetDate(dateStr, fallbackYear);
           if (!dateIso) continue;
 
-          if (!isPackingOnlyRole && dailyTargetColIdx !== -1) {
+          if (!isMetricOnlyRole && dailyTargetColIdx !== -1) {
             const tRowVal = parseNumericCell(
               extractExcelCellString(row.getCell(dailyTargetColIdx).value)
             );
@@ -1401,7 +1572,7 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
             }
           }
 
-          if (!isPackingOnlyRole && cutInputColIdx !== -1) {
+          if (!isMetricOnlyRole && cutInputColIdx !== -1) {
             const inVal = parseNumericCell(extractExcelCellString(row.getCell(cutInputColIdx).value));
             if (inVal !== null) {
               hasInputData = true;
@@ -1414,7 +1585,20 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
             }
           }
 
-          if (packColIdx !== -1) {
+          if (!isPackingOnlyRole && outColIdx !== -1) {
+            const outVal = parseNumericCell(extractExcelCellString(row.getCell(outColIdx).value));
+            if (outVal !== null) {
+              hasOutputData = true;
+              sumDailyOutput += outVal;
+              if (!maxOutputDate || dateIso >= maxOutputDate) {
+                latestOutputOnMaxDate =
+                  dateIso > maxOutputDate ? outVal : Math.max(latestOutputOnMaxDate, outVal);
+                maxOutputDate = dateIso;
+              }
+            }
+          }
+
+          if (!isOutputOnlyRole && packColIdx !== -1) {
             const pkVal = parseNumericCell(extractExcelCellString(row.getCell(packColIdx).value));
             if (pkVal !== null) {
               hasPackData = true;
@@ -1427,7 +1611,7 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
             }
           }
 
-          if (cutColIdx !== -1 && !isPackingOnlyRole) {
+          if (cutColIdx !== -1 && !isMetricOnlyRole) {
             const cutStr = extractExcelCellString(row.getCell(cutColIdx).value);
             const qty = parseNumericCell(cutStr);
             if (!qty) continue;
@@ -1444,31 +1628,41 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
         }
       }
 
-      const finalOrderQty = isPackingOnlyRole ? null : poTtlQty ?? (poSumQty > 0 ? poSumQty : null);
-      const finalDailyTarget = isPackingOnlyRole ? null : latestTargetFromRows ?? dailyTargetFromMeta;
-      const finalCuttingQty = isPackingOnlyRole
+      const finalOrderQty = isMetricOnlyRole ? null : poTtlQty ?? (poSumQty > 0 ? poSumQty : null);
+      const finalDailyTarget = isMetricOnlyRole ? null : latestTargetFromRows ?? dailyTargetFromMeta;
+      const finalCuttingQty = isMetricOnlyRole
         ? 0
         : dailyHeaderIsCumulative
           ? Math.max(latestDailyCutOnMaxDate, poTtlCut ?? 0)
           : Math.max(poTtlCut ?? 0, sumDailyCut, daywiseTotalCut ?? 0, poSumCut);
       const finalInputQty =
-        !isPackingOnlyRole && hasInputData
+        !isMetricOnlyRole && hasInputData
           ? cutInputIsCumulative
             ? latestInputOnMaxDate
             : sumDailyInput
           : null;
-      const finalPackQty = hasPackData
-        ? packIsCumulative
-          ? Math.max(latestPackOnMaxDate, poTtlPack ?? 0)
-          : Math.max(poTtlPack ?? 0, sumDailyPack, poSumPack)
-        : poTtlPack ?? (poSumPack > 0 ? poSumPack : packFromMeta);
-      const latestDateIso = maxDailyCutDate || maxPackDate || topDateIso || referenceDateIso;
+      const finalOutputQty = isPackingOnlyRole
+        ? null
+        : hasOutputData
+          ? outIsCumulative
+            ? Math.max(latestOutputOnMaxDate, poTtlOutput ?? 0)
+            : Math.max(poTtlOutput ?? 0, sumDailyOutput, poSumOutput)
+          : poTtlOutput ?? (poSumOutput > 0 ? poSumOutput : outputFromMeta);
+      const finalPackQty = isOutputOnlyRole
+        ? null
+        : hasPackData
+          ? packIsCumulative
+            ? Math.max(latestPackOnMaxDate, poTtlPack ?? 0)
+            : Math.max(poTtlPack ?? 0, sumDailyPack, poSumPack)
+          : poTtlPack ?? (poSumPack > 0 ? poSumPack : packFromMeta);
+      const latestDateIso = maxDailyCutDate || maxOutputDate || maxPackDate || topDateIso || referenceDateIso;
 
       if (
         finalCuttingQty === 0 &&
         finalOrderQty === null &&
         finalDailyTarget === null &&
         finalInputQty === null &&
+        finalOutputQty === null &&
         finalPackQty === null
       ) {
         continue;
@@ -1504,8 +1698,9 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
         finalOrderQty !== null ||
         finalDailyTarget !== null ||
         finalInputQty !== null ||
+        finalOutputQty !== null ||
         finalPackQty !== null ||
-        (!isPackingOnlyRole && (remarkFromMeta.length > 0 || releasedFromMeta))
+        (!isMetricOnlyRole && (remarkFromMeta.length > 0 || releasedFromMeta))
       ) {
         const allPgMatched = findAllRecordsForPgAcrossLines(
           records,
@@ -1520,9 +1715,10 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
           if (finalOrderQty !== null) existingPatch.plannedQty = finalOrderQty;
           if (finalDailyTarget !== null) existingPatch.dailyTargetQty = finalDailyTarget;
           if (finalInputQty !== null) existingPatch.cuttingInputQty = finalInputQty;
+          if (finalOutputQty !== null) existingPatch.outputQty = finalOutputQty;
           if (finalPackQty !== null) existingPatch.packingQty = finalPackQty;
-          if (!isPackingOnlyRole && remarkFromMeta) existingPatch.remarks.add(remarkFromMeta);
-          if (!isPackingOnlyRole && releasedFromMeta) existingPatch.foFullQtyReleased = true;
+          if (!isMetricOnlyRole && remarkFromMeta) existingPatch.remarks.add(remarkFromMeta);
+          if (!isMetricOnlyRole && releasedFromMeta) existingPatch.foFullQtyReleased = true;
         } else {
           recordPatchMap.set(primaryRecord.id, {
             primaryRecordId: primaryRecord.id,
@@ -1530,14 +1726,15 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
             plannedQty: finalOrderQty,
             dailyTargetQty: finalDailyTarget,
             cuttingInputQty: finalInputQty,
+            outputQty: finalOutputQty,
             packingQty: finalPackQty,
-            remarks: !isPackingOnlyRole && remarkFromMeta ? new Set([remarkFromMeta]) : new Set(),
-            foFullQtyReleased: !isPackingOnlyRole && releasedFromMeta,
+            remarks: !isMetricOnlyRole && remarkFromMeta ? new Set([remarkFromMeta]) : new Set(),
+            foFullQtyReleased: !isMetricOnlyRole && releasedFromMeta,
           });
         }
       }
 
-      if (!isPackingOnlyRole && finalCuttingQty > 0) {
+      if (!isMetricOnlyRole && finalCuttingQty > 0) {
         const existingEntry = latestEntryByRecord.get(primaryRecord.id);
         const tabNote = `${ws.name}${lineFromMeta ? ` (Line ${lineFromMeta})` : ''}`;
         if (!existingEntry || latestDateIso > existingEntry.dateIso) {
@@ -1555,16 +1752,17 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
     }
   }
 
-  // PASS 2: Standard tabular / Summary / Packing / date-matrix sheets
+  // PASS 2: Standard tabular / Summary / Output / Packing / date-matrix sheets
   let fallbackLayout: ParsedSheetResult['detectedLayout'] = 'daily_rows';
   for (const ws of wb.worksheets) {
     if (handledSheetIds.has(ws.id)) continue;
     const wsNameUpper = ws.name.toUpperCase();
     if (wsNameUpper === 'NOTE' || wsNameUpper === 'NOTES') continue;
-    // When PG tabs were already parsed, also scan Summary / Packing / Finishing tabs
+    // When PG tabs were already parsed, also scan Summary / Output / Packing / Finishing tabs
     const isSummaryFallback = usedPgTabLayout;
     const isExplicitPackingTab = /PACK|FINISH/.test(wsNameUpper);
-    if (isSummaryFallback && !/SUMMARY|STATUS|REPORT|PACK|FINISH|DAILY|MASTER/.test(wsNameUpper)) {
+    const isExplicitOutputTab = !isExplicitPackingTab && /\bOUTPUT\b|SEWING|PRODUCTION/.test(wsNameUpper);
+    if (isSummaryFallback && !/SUMMARY|STATUS|REPORT|PACK|FINISH|OUTPUT|SEWING|DAILY|MASTER/.test(wsNameUpper)) {
       continue;
     }
 
@@ -1579,14 +1777,18 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
         syncMode,
         defaultFactory: inferredFactory,
         sheetLabel: ws.name,
-        sheetRole: isPackingOnlyRole || isExplicitPackingTab ? 'packing' : 'cutting',
+        sheetRole: isOutputOnlyRole || isExplicitOutputTab
+          ? 'output'
+          : isPackingOnlyRole || isExplicitPackingTab
+            ? 'packing'
+            : 'cutting',
       });
       fallbackLayout = parsed.detectedLayout;
 
       for (const upd of parsed.recordUpdates) {
         const primaryId = upd.primaryRecordId || upd.recordIds[0];
         if (!primaryId) continue;
-        // Always merge Summary/Packing/Status updates even for PGs handled in PASS 1
+        // Always merge Summary/Output/Packing/Status updates even for PGs handled in PASS 1
         const existingPatch = recordPatchMap.get(primaryId);
         if (existingPatch) {
           for (const rid of upd.recordIds) existingPatch.recordIds.add(rid);
@@ -1608,6 +1810,13 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
             existingPatch.cuttingInputQty = upd.cuttingInputQty;
           }
           if (
+            upd.outputQty !== undefined &&
+            upd.outputQty !== null &&
+            (existingPatch.outputQty === null || isExplicitOutputTab || isOutputOnlyRole)
+          ) {
+            existingPatch.outputQty = upd.outputQty;
+          }
+          if (
             upd.packingQty !== undefined &&
             upd.packingQty !== null &&
             (existingPatch.packingQty === null || isExplicitPackingTab || isPackingOnlyRole)
@@ -1627,6 +1836,7 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
             plannedQty: upd.plannedQty ?? null,
             dailyTargetQty: upd.dailyTargetQty ?? null,
             cuttingInputQty: upd.cuttingInputQty ?? null,
+            outputQty: upd.outputQty ?? null,
             packingQty: upd.packingQty ?? null,
             remarks: upd.sheetRemark ? new Set([upd.sheetRemark]) : new Set(),
             foFullQtyReleased: Boolean(upd.foFullQtyReleased),
@@ -1634,7 +1844,7 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
         }
       }
 
-      if (!isSummaryFallback || isExplicitPackingTab) {
+      if (!isSummaryFallback || isExplicitPackingTab || isExplicitOutputTab) {
         matchedRows += parsed.matchedRows;
         unmatchedCount += parsed.unmatchedCount;
         for (const s of parsed.sampleUnmatched) {
@@ -1696,6 +1906,7 @@ export async function parseOnlineCuttingXlsxBuffer(params: {
       plannedQty: p.plannedQty,
       dailyTargetQty: p.dailyTargetQty,
       cuttingInputQty: p.cuttingInputQty,
+      outputQty: p.outputQty,
       packingQty: p.packingQty,
       sheetRemark: joinedRemark || undefined,
       foFullQtyReleased: p.foFullQtyReleased,
@@ -1928,6 +2139,11 @@ export async function runCuttingSheetSync(params: {
     factory: fac,
     url: (cfg.factoryUrls?.[fac] || '').trim(),
   })).filter((x) => Boolean(x.url));
+  const outputPrimaryUrl = (cfg.outputSheetUrl || '').trim();
+  const outputFactoryUrlEntries = ALLOWED_FACTORIES.map((fac) => ({
+    factory: fac,
+    url: (cfg.outputFactoryUrls?.[fac] || '').trim(),
+  })).filter((x) => Boolean(x.url));
   const packingPrimaryUrl = (cfg.packingSheetUrl || '').trim();
   const packingFactoryUrlEntries = ALLOWED_FACTORIES.map((fac) => ({
     factory: fac,
@@ -1939,10 +2155,12 @@ export async function runCuttingSheetSync(params: {
   if (
     !primaryUrl &&
     factoryUrlEntries.length === 0 &&
+    !outputPrimaryUrl &&
+    outputFactoryUrlEntries.length === 0 &&
     !packingPrimaryUrl &&
     packingFactoryUrlEntries.length === 0
   ) {
-    const errMsg = 'No online cutting or packing sheet URL configured yet.';
+    const errMsg = 'No online cutting, output, or packing sheet URL configured yet.';
     const nextState = applySyncedCuttingEntries({
       replaceSheetEntries: false,
       syncPatch: {
@@ -1981,6 +2199,24 @@ export async function runCuttingSheetSync(params: {
       label: 'Main Sheet',
       url: primaryUrl,
       sheetRole: 'cutting',
+    });
+  }
+  for (const item of outputFactoryUrlEntries) {
+    sources.push({
+      label: `${item.factory} Output`,
+      url: item.url,
+      defaultFactory: item.factory,
+      sheetRole: 'output',
+    });
+  }
+  if (
+    outputPrimaryUrl &&
+    !outputFactoryUrlEntries.some((x) => x.url === outputPrimaryUrl)
+  ) {
+    sources.push({
+      label: 'Main Output Sheet',
+      url: outputPrimaryUrl,
+      sheetRole: 'output',
     });
   }
   for (const item of packingFactoryUrlEntries) {
@@ -2082,7 +2318,7 @@ export async function runCuttingSheetSync(params: {
       syncPatch: {
         lastCheckedAtIso: nowIso,
         lastStatus: 'Success',
-        lastMessage: `Checked at ${nowIso.slice(11, 16)} UTC — All linked sheets up to date (${cfg.lastMatchedCount} PGs, ${cfg.lastTotalQty.toLocaleString()} pcs cut${cfg.lastPackingMatchedCount ? `, ${cfg.lastPackingMatchedCount} PGs / ${(cfg.lastPackingTotalQty ?? 0).toLocaleString()} pcs packed` : ''}).`,
+        lastMessage: `Checked at ${nowIso.slice(11, 16)} UTC — All linked sheets up to date (${cfg.lastMatchedCount} PGs, ${cfg.lastTotalQty.toLocaleString()} pcs cut${cfg.lastOutputMatchedCount ? `, ${cfg.lastOutputMatchedCount} PGs / ${(cfg.lastOutputTotalQty ?? 0).toLocaleString()} pcs output` : ''}${cfg.lastPackingMatchedCount ? `, ${cfg.lastPackingMatchedCount} PGs / ${(cfg.lastPackingTotalQty ?? 0).toLocaleString()} pcs packed` : ''}).`,
       },
     });
     return {
@@ -2104,6 +2340,7 @@ export async function runCuttingSheetSync(params: {
       plannedQty: number | null;
       dailyTargetQty: number | null;
       cuttingInputQty: number | null;
+      outputQty: number | null;
       packingQty: number | null;
       remarks: Set<string>;
       foFullQtyReleased: boolean;
@@ -2170,6 +2407,9 @@ export async function runCuttingSheetSync(params: {
           if (upd.cuttingInputQty !== undefined && upd.cuttingInputQty !== null) {
             prev.cuttingInputQty = upd.cuttingInputQty;
           }
+          if (upd.outputQty !== undefined && upd.outputQty !== null) {
+            prev.outputQty = upd.outputQty;
+          }
           if (upd.packingQty !== undefined && upd.packingQty !== null) {
             prev.packingQty = upd.packingQty;
           }
@@ -2182,6 +2422,7 @@ export async function runCuttingSheetSync(params: {
             plannedQty: upd.plannedQty ?? null,
             dailyTargetQty: upd.dailyTargetQty ?? null,
             cuttingInputQty: upd.cuttingInputQty ?? null,
+            outputQty: upd.outputQty ?? null,
             packingQty: upd.packingQty ?? null,
             remarks: upd.sheetRemark ? new Set([upd.sheetRemark]) : new Set(),
             foFullQtyReleased: Boolean(upd.foFullQtyReleased),
@@ -2202,13 +2443,26 @@ export async function runCuttingSheetSync(params: {
       if (payload.defaultFactory) {
         const facEntries = parsed.entries.filter((e) => e.factory === payload.defaultFactory);
         const facQty = facEntries.reduce((sum, e) => sum + e.cuttingQty, 0);
+        const facOutUpdates = parsed.recordUpdates.filter(
+          (u) => u.outputQty !== undefined && u.outputQty !== null
+        );
+        const facOutQty = facOutUpdates.reduce((sum, u) => sum + (u.outputQty || 0), 0);
         const facPackUpdates = parsed.recordUpdates.filter(
           (u) => u.packingQty !== undefined && u.packingQty !== null
         );
         const facPackQty = facPackUpdates.reduce((sum, u) => sum + (u.packingQty || 0), 0);
         const facPgUpdatesCount = parsed.recordUpdates.length;
         const prevFacStatus = factoryStatusesPatch[payload.defaultFactory];
-        if (payload.sheetRole === 'packing' && prevFacStatus && prevFacStatus.status === 'Success') {
+        if (payload.sheetRole === 'output' && prevFacStatus && prevFacStatus.status === 'Success') {
+          factoryStatusesPatch[payload.defaultFactory] = {
+            ...prevFacStatus,
+            lastSyncedAtIso: nowIso,
+            message:
+              facOutUpdates.length > 0
+                ? `${prevFacStatus.message} · Output: ${facOutUpdates.length} PGs (${facOutQty.toLocaleString()} pcs)`
+                : prevFacStatus.message,
+          };
+        } else if (payload.sheetRole === 'packing' && prevFacStatus && prevFacStatus.status === 'Success') {
           factoryStatusesPatch[payload.defaultFactory] = {
             ...prevFacStatus,
             lastSyncedAtIso: nowIso,
@@ -2225,29 +2479,46 @@ export async function runCuttingSheetSync(params: {
             totalQty: facQty,
             message:
               facEntries.length > 0
-                ? `Latest PG cut: ${facEntries.length} PGs (${facQty.toLocaleString()} pcs)${facPackUpdates.length > 0 ? ` · Packed: ${facPackUpdates.length} PGs (${facPackQty.toLocaleString()} pcs)` : ''}`
-                : facPackUpdates.length > 0
-                  ? `Collected Packing Qty for ${facPackUpdates.length} PG(s) (${facPackQty.toLocaleString()} pcs)`
-                  : facPgUpdatesCount > 0
-                    ? `Updated Order Qty & Target for ${facPgUpdatesCount} PG(s)`
-                    : parsed.unmatchedCount > 0
-                      ? `0 of ${parsed.unmatchedCount} PG# matched Master Plan`
-                      : 'No PG# cutting, packing, or order qty found yet',
+                ? `Latest PG cut: ${facEntries.length} PGs (${facQty.toLocaleString()} pcs)${facOutUpdates.length > 0 ? ` · Output: ${facOutUpdates.length} PGs (${facOutQty.toLocaleString()} pcs)` : ''}${facPackUpdates.length > 0 ? ` · Packed: ${facPackUpdates.length} PGs (${facPackQty.toLocaleString()} pcs)` : ''}`
+                : facOutUpdates.length > 0
+                  ? `Collected Output Qty for ${facOutUpdates.length} PG(s) (${facOutQty.toLocaleString()} pcs)`
+                  : facPackUpdates.length > 0
+                    ? `Collected Packing Qty for ${facPackUpdates.length} PG(s) (${facPackQty.toLocaleString()} pcs)`
+                    : facPgUpdatesCount > 0
+                      ? `Updated Order Qty & Target for ${facPgUpdatesCount} PG(s)`
+                      : parsed.unmatchedCount > 0
+                        ? `0 of ${parsed.unmatchedCount} PG# matched Master Plan`
+                        : 'No PG# cutting, output, packing, or order qty found yet',
           };
         }
       } else {
         for (const fac of ALLOWED_FACTORIES) {
           const facEntries = parsed.entries.filter((e) => e.factory === fac);
+          const facOutUpdates = parsed.recordUpdates.filter((u) => {
+            if (u.outputQty === undefined || u.outputQty === null) return false;
+            const rec = state.records.find((r) => r.id === (u.primaryRecordId || u.recordIds[0]));
+            return rec?.factory === fac;
+          });
           const facPackUpdates = parsed.recordUpdates.filter((u) => {
             if (u.packingQty === undefined || u.packingQty === null) return false;
             const rec = state.records.find((r) => r.id === (u.primaryRecordId || u.recordIds[0]));
             return rec?.factory === fac;
           });
-          if (facEntries.length > 0 || facPackUpdates.length > 0) {
+          if (facEntries.length > 0 || facOutUpdates.length > 0 || facPackUpdates.length > 0) {
             const facQty = facEntries.reduce((sum, e) => sum + e.cuttingQty, 0);
+            const facOutQty = facOutUpdates.reduce((sum, u) => sum + (u.outputQty || 0), 0);
             const facPackQty = facPackUpdates.reduce((sum, u) => sum + (u.packingQty || 0), 0);
             const prevFacStatus = factoryStatusesPatch[fac];
-            if (payload.sheetRole === 'packing' && prevFacStatus && prevFacStatus.status === 'Success') {
+            if (payload.sheetRole === 'output' && prevFacStatus && prevFacStatus.status === 'Success') {
+              factoryStatusesPatch[fac] = {
+                ...prevFacStatus,
+                lastSyncedAtIso: nowIso,
+                message:
+                  facOutUpdates.length > 0
+                    ? `${prevFacStatus.message} · Output: ${facOutUpdates.length} PGs (${facOutQty.toLocaleString()} pcs)`
+                    : prevFacStatus.message,
+              };
+            } else if (payload.sheetRole === 'packing' && prevFacStatus && prevFacStatus.status === 'Success') {
               factoryStatusesPatch[fac] = {
                 ...prevFacStatus,
                 lastSyncedAtIso: nowIso,
@@ -2264,8 +2535,10 @@ export async function runCuttingSheetSync(params: {
                 totalQty: facQty,
                 message:
                   facEntries.length > 0
-                    ? `Latest PG cut: ${facEntries.length} PGs (${facQty.toLocaleString()} pcs)${facPackUpdates.length > 0 ? ` · Packed: ${facPackUpdates.length} PGs` : ''}`
-                    : `Collected Packing Qty: ${facPackUpdates.length} PGs (${facPackQty.toLocaleString()} pcs)`,
+                    ? `Latest PG cut: ${facEntries.length} PGs (${facQty.toLocaleString()} pcs)${facOutUpdates.length > 0 ? ` · Output: ${facOutUpdates.length} PGs` : ''}${facPackUpdates.length > 0 ? ` · Packed: ${facPackUpdates.length} PGs` : ''}`
+                    : facOutUpdates.length > 0
+                      ? `Collected Output Qty: ${facOutUpdates.length} PGs (${facOutQty.toLocaleString()} pcs)`
+                      : `Collected Packing Qty: ${facPackUpdates.length} PGs (${facPackQty.toLocaleString()} pcs)`,
               };
             }
           }
@@ -2297,12 +2570,18 @@ export async function runCuttingSheetSync(params: {
       plannedQty: u.plannedQty,
       dailyTargetQty: u.dailyTargetQty,
       cuttingInputQty: u.cuttingInputQty,
+      outputQty: u.outputQty,
       packingQty: u.packingQty,
       sheetRemark: joinedRemark || undefined,
       foFullQtyReleased: u.foFullQtyReleased,
     };
   });
   const releasedUpdatesCount = recordUpdates.filter((u) => u.foFullQtyReleased).length;
+  const outputUpdates = recordUpdates.filter(
+    (u) => u.outputQty !== undefined && u.outputQty !== null
+  );
+  const outputUpdatesCount = outputUpdates.length;
+  const outputBatchQty = outputUpdates.reduce((sum, u) => sum + (u.outputQty || 0), 0);
   const packingUpdates = recordUpdates.filter(
     (u) => u.packingQty !== undefined && u.packingQty !== null
   );
@@ -2322,6 +2601,9 @@ export async function runCuttingSheetSync(params: {
     if (syncedEntries.length > 0) {
       parts.push(`${syncedEntries.length} PG latest cutting totals (${batchQty.toLocaleString()} pcs)`);
     }
+    if (outputUpdatesCount > 0) {
+      parts.push(`Output Qty for ${outputUpdatesCount} PG(s) (${outputBatchQty.toLocaleString()} pcs)`);
+    }
     if (packingUpdatesCount > 0) {
       parts.push(`Packing Qty for ${packingUpdatesCount} PG(s) (${packingBatchQty.toLocaleString()} pcs)`);
     }
@@ -2340,7 +2622,7 @@ export async function runCuttingSheetSync(params: {
   } else if (totalUnmatched > 0) {
     summaryMsg = `Connected to sheet, but 0 of ${totalUnmatched} PG# rows matched Master Plan (${allSamples.slice(0, 3).join(', ')}).`;
   } else {
-    summaryMsg = 'Connected to sheet, but no PG# cutting, packing, or order qty rows were found yet.';
+    summaryMsg = 'Connected to sheet, but no PG# cutting, output, packing, or order qty rows were found yet.';
   }
   if (sourceErrors.length > 0) {
     summaryMsg += ` Errors: ${sourceErrors.join(' | ')}`;
@@ -2483,6 +2765,9 @@ export async function importCuttingFileBuffer(params: {
     const targetUpdatedCount = parsed.recordUpdates.filter(
       (u) => u.dailyTargetQty !== undefined && u.dailyTargetQty !== null
     ).length;
+    const outputUpdatedCount = parsed.recordUpdates.filter(
+      (u) => u.outputQty !== undefined && u.outputQty !== null
+    ).length;
     const packingUpdatedCount = parsed.recordUpdates.filter(
       (u) => u.packingQty !== undefined && u.packingQty !== null
     ).length;
@@ -2491,12 +2776,12 @@ export async function importCuttingFileBuffer(params: {
     ).length;
 
     const summaryMsg = hasAnyUpdate
-      ? `Uploaded "${params.fileName}" for ${factoryLabel}: latest cutting totals for ${parsed.entries.length} PG(s) (${batchQty.toLocaleString()} pcs), filled Order Qty (${orderQtyUpdatedCount} PGs), Packing Qty (${packingUpdatedCount} PGs), Daily Target (${targetUpdatedCount} PGs)${releasedUpdatedCount > 0 ? `, Full Qty Released (${releasedUpdatedCount} PGs)` : ''}. Other factories preserved.${
+      ? `Uploaded "${params.fileName}" for ${factoryLabel}: latest cutting totals for ${parsed.entries.length} PG(s) (${batchQty.toLocaleString()} pcs), filled Order Qty (${orderQtyUpdatedCount} PGs), Output Qty (${outputUpdatedCount} PGs), Packing Qty (${packingUpdatedCount} PGs), Daily Target (${targetUpdatedCount} PGs)${releasedUpdatedCount > 0 ? `, Full Qty Released (${releasedUpdatedCount} PGs)` : ''}. Other factories preserved.${
           parsed.unmatchedCount > 0 ? ` ${parsed.unmatchedCount} PG#/tab(s) not in Master Plan.` : ''
         }`
       : parsed.unmatchedCount > 0
         ? `Uploaded "${params.fileName}", but 0 of ${parsed.unmatchedCount} PG# items matched current Master Plan (${parsed.sampleUnmatched.slice(0, 3).join(', ')}). Existing data kept unchanged.`
-        : `Uploaded "${params.fileName}", but no PG# order qty, cutting, or packing rows were found. Existing data kept unchanged.`;
+        : `Uploaded "${params.fileName}", but no PG# order qty, cutting, output, or packing rows were found. Existing data kept unchanged.`;
 
     const logEntry: CuttingSheetSyncLog = {
       id: `CUPL-${Date.now().toString(36).toUpperCase()}`,

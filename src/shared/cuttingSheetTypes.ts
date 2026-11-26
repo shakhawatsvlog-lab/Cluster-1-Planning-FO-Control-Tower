@@ -30,6 +30,8 @@ export interface CuttingSheetSyncConfig {
   enabled: boolean;
   sheetUrl: string;
   factoryUrls: FactorySheetUrlMap;
+  outputSheetUrl: string;
+  outputFactoryUrls: FactorySheetUrlMap;
   packingSheetUrl: string;
   packingFactoryUrls: FactorySheetUrlMap;
   factoryStatuses: FactorySyncStatusMap;
@@ -43,6 +45,8 @@ export interface CuttingSheetSyncConfig {
   lastMatchedCount: number;
   lastUnmatchedCount: number;
   lastTotalQty: number;
+  lastOutputMatchedCount?: number;
+  lastOutputTotalQty?: number;
   lastPackingMatchedCount?: number;
   lastPackingTotalQty?: number;
   logs: CuttingSheetSyncLog[];
@@ -52,6 +56,8 @@ export const DEFAULT_CUTTING_SHEET_CONFIG: CuttingSheetSyncConfig = {
   enabled: false,
   sheetUrl: '',
   factoryUrls: {},
+  outputSheetUrl: '',
+  outputFactoryUrls: {},
   packingSheetUrl: '',
   packingFactoryUrls: {},
   factoryStatuses: {},
@@ -65,6 +71,8 @@ export const DEFAULT_CUTTING_SHEET_CONFIG: CuttingSheetSyncConfig = {
   lastMatchedCount: 0,
   lastUnmatchedCount: 0,
   lastTotalQty: 0,
+  lastOutputMatchedCount: 0,
+  lastOutputTotalQty: 0,
   lastPackingMatchedCount: 0,
   lastPackingTotalQty: 0,
   logs: [],

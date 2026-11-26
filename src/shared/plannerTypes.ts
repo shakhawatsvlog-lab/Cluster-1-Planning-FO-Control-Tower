@@ -10,6 +10,8 @@ export type LineLifecycleStage = 'Order Closed' | 'Running' | 'Upcoming (Next)' 
 
 export type PackingStatus = 'Not Started' | 'In Progress' | 'Completed' | 'Over Packed';
 
+export type OutputStatus = 'Not Started' | 'In Progress' | 'Completed' | 'Over Output';
+
 export type EstimatedOutputStatus = 'available' | 'awaiting_running_end_date' | 'not_applicable';
 
 export interface PlanningRecord {
@@ -33,6 +35,8 @@ export interface PlanningRecord {
   foIssueQty: number | null; // Fabric Order Issue Qty
   cuttingBaseQty: number | null; // Optional opening cutting qty before daily log
   cuttingInputQty?: number | null; // Synced from online cutting sheet when a distinct input column exists
+  outputQty?: number | null; // Synced from online sheet if present, or Admin-entered in Control Tower
+  outputUpdatedAtIso?: string | null;
   packingQty?: number | null; // Synced from online sheet if present, or Admin-entered in Control Tower
   packingUpdatedAtIso?: string | null;
   dailyTargetQty: number | null; // Daily cutting target qty
@@ -77,6 +81,9 @@ export interface EvaluatedPlanningRecord extends PlanningRecord {
   precedingRunningEndDateIso: string | null;
   cuttingInputQty: number | null;
   cuttingOutputQty: number;
+  outputQty: number | null;
+  balanceToOutput: number | null;
+  outputStatus: OutputStatus;
   packingQty: number | null;
   balanceToPack: number | null;
   packingStatus: PackingStatus;
@@ -195,6 +202,10 @@ export interface PublicMasterPlanRecord {
   precedingRunningEndDateIso: string | null;
   cuttingInputQty: number | null;
   cuttingOutputQty: number;
+  outputQty: number | null;
+  balanceToOutput: number | null;
+  outputStatus: OutputStatus;
+  outputUpdatedAtIso: string | null;
   packingQty: number | null;
   balanceToPack: number | null;
   packingStatus: PackingStatus;
@@ -215,6 +226,7 @@ export interface PublicMasterPlanResponse {
   cuttingSheetSummary?: {
     hasCuttingData: boolean;
     hasCuttingInputColumn: boolean;
+    hasOutputData: boolean;
     hasPackingData: boolean;
     lastSyncedAtIso: string | null;
   };
@@ -823,6 +835,47 @@ export function computePackingSummary(
   };
 }
 
+export function computeOutputSummary(
+  cuttingOutputQty: number,
+  rawOutputQty: number | null | undefined
+): {
+  outputQty: number | null;
+  balanceToOutput: number | null;
+  outputStatus: OutputStatus;
+} {
+  const safeCut =
+    Number.isFinite(cuttingOutputQty) && cuttingOutputQty > 0
+      ? Math.round(cuttingOutputQty)
+      : 0;
+  const hasEntry =
+    rawOutputQty !== null &&
+    rawOutputQty !== undefined &&
+    Number.isFinite(rawOutputQty) &&
+    rawOutputQty >= 0;
+  const outputQty = hasEntry ? Math.round(rawOutputQty) : null;
+  const effectiveOutput = outputQty ?? 0;
+
+  let outputStatus: OutputStatus = 'Not Started';
+  if (effectiveOutput === 0) {
+    outputStatus = 'Not Started';
+  } else if (effectiveOutput > safeCut) {
+    outputStatus = 'Over Output';
+  } else if (safeCut > 0 && effectiveOutput === safeCut) {
+    outputStatus = 'Completed';
+  } else {
+    outputStatus = 'In Progress';
+  }
+
+  const balanceToOutput =
+    safeCut > 0 || outputQty !== null ? safeCut - effectiveOutput : null;
+
+  return {
+    outputQty,
+    balanceToOutput,
+    outputStatus,
+  };
+}
+
 export function evaluatePlanningRecords(
   records: PlanningRecord[],
   cuttingEntries: DailyCuttingEntry[],
@@ -915,6 +968,10 @@ export function evaluatePlanningRecords(
         ? Math.round(record.cuttingInputQty)
         : null;
     const cuttingOutputQty = cuttingFinishedQty;
+    const { outputQty, balanceToOutput, outputStatus } = computeOutputSummary(
+      cuttingOutputQty,
+      record.outputQty
+    );
     const { packingQty, balanceToPack, packingStatus } = computePackingSummary(
       cuttingOutputQty,
       record.packingQty
@@ -959,6 +1016,9 @@ export function evaluatePlanningRecords(
       precedingRunningEndDateIso,
       cuttingInputQty,
       cuttingOutputQty,
+      outputQty,
+      balanceToOutput,
+      outputStatus,
       packingQty,
       balanceToPack,
       packingStatus,

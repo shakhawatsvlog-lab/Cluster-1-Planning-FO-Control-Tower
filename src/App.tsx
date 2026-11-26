@@ -849,6 +849,8 @@ export default function App() {
         plannedQty: number | null;
         foIssueQty: number | null;
         dailyTargetQty: number | null;
+        outputQty: number | null;
+        outputUpdatedAtIso: string | null;
         packingQty: number | null;
         packingUpdatedAtIso: string | null;
         endDateIso: string | null;
@@ -949,6 +951,71 @@ export default function App() {
       } catch (err) {
         pendingLocalChangesRef.current = false;
         console.error('Failed to persist Admin packing qty:', err);
+      }
+    },
+    [isEditingLocked, promptAdminSignIn, buildHeaders, setSessionToken, meta, cuttingEntries, saveLocalBackup]
+  );
+
+  const handleUpdateOutputQty = useCallback(
+    async (recordIds: string[], outputQty: number | null) => {
+      if (isEditingLocked) {
+        promptAdminSignIn('Admin sign-in is required to update Output Qty.');
+        return;
+      }
+      const cleanIds = recordIds.filter(Boolean);
+      if (cleanIds.length === 0) return;
+      const sanitized =
+        outputQty !== null && Number.isFinite(outputQty) && outputQty >= 0
+          ? Math.round(outputQty)
+          : null;
+      const nowIso = sanitized !== null ? new Date().toISOString() : null;
+
+      setRecords((prev) => {
+        const idSet = new Set(cleanIds);
+        const next = prev.map((r) =>
+          idSet.has(r.id)
+            ? { ...r, outputQty: sanitized, outputUpdatedAtIso: nowIso }
+            : r
+        );
+        if (meta) saveLocalBackup(meta, next, cuttingEntries);
+        return next;
+      });
+      setHasCustomEdits(true);
+
+      try {
+        pendingLocalChangesRef.current = true;
+        const res = await fetch(apiUrl('/api/output'), {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: buildHeaders(true),
+          body: JSON.stringify({ recordIds: cleanIds, outputQty: sanitized }),
+        });
+        if (res.status === 401 || res.status === 403) {
+          pendingLocalChangesRef.current = false;
+          setAdminUnlocked(false);
+          setSessionToken(null);
+          promptAdminSignIn('Admin session expired. Sign in again to save Output Qty.');
+          return;
+        }
+        if (!res.ok) {
+          pendingLocalChangesRef.current = false;
+          const errPayload = (await res.json().catch(() => null)) as { error?: string } | null;
+          setBannerMessage(errPayload?.error || 'Unable to save Output Qty to server.');
+          return;
+        }
+        const okPayload = (await res.json().catch(() => null)) as {
+          updatedAtIso?: string;
+        } | null;
+        if (okPayload?.updatedAtIso) {
+          lastServerVersionRef.current = okPayload.updatedAtIso;
+        }
+        pendingLocalChangesRef.current = false;
+        lastBgSyncMsRef.current = Date.now();
+        setLastAdminSyncedAt(formatCurrentTimeLabel());
+        setConnectionStatus('connected');
+      } catch (err) {
+        pendingLocalChangesRef.current = false;
+        console.error('Failed to persist Admin output qty:', err);
       }
     },
     [isEditingLocked, promptAdminSignIn, buildHeaders, setSessionToken, meta, cuttingEntries, saveLocalBackup]
@@ -1142,6 +1209,8 @@ export default function App() {
           foIssueQty: match.foIssueQty,
           cuttingBaseQty: match.cuttingBaseQty,
           cuttingInputQty: match.cuttingInputQty ?? null,
+          outputQty: match.outputQty ?? null,
+          outputUpdatedAtIso: match.outputUpdatedAtIso ?? null,
           packingQty: match.packingQty ?? null,
           packingUpdatedAtIso: match.packingUpdatedAtIso ?? null,
           dailyTargetQty: match.dailyTargetQty,
@@ -1717,6 +1786,8 @@ export default function App() {
         | 'enabled'
         | 'sheetUrl'
         | 'factoryUrls'
+        | 'outputSheetUrl'
+        | 'outputFactoryUrls'
         | 'packingSheetUrl'
         | 'packingFactoryUrls'
         | 'syncMode'
@@ -2675,6 +2746,7 @@ export default function App() {
                   onAddCuttingEntry={handleAddCuttingEntry}
                   onDeleteCuttingEntry={handleDeleteCuttingEntry}
                   onUpdateRecord={handleUpdateRecord}
+                  onUpdateOutputQty={handleUpdateOutputQty}
                   onUpdatePackingQty={handleUpdatePackingQty}
                   onSetRunningStyle={handleSetRunningStyle}
                 />

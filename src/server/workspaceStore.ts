@@ -117,6 +117,13 @@ function normalizeRecords(records: PlanningRecord[]): PlanningRecord[] {
       r.cuttingInputQty >= 0
         ? Math.round(r.cuttingInputQty)
         : null;
+    const outputQty =
+      r.outputQty !== null &&
+      r.outputQty !== undefined &&
+      Number.isFinite(r.outputQty) &&
+      r.outputQty >= 0
+        ? Math.round(r.outputQty)
+        : null;
     const packingQty =
       r.packingQty !== null &&
       r.packingQty !== undefined &&
@@ -130,6 +137,9 @@ function normalizeRecords(records: PlanningRecord[]): PlanningRecord[] {
       isFinished: isClosed,
       isManualRunning: isClosed ? false : Boolean(r.isManualRunning),
       cuttingInputQty,
+      outputQty,
+      outputUpdatedAtIso:
+        typeof r.outputUpdatedAtIso === 'string' ? r.outputUpdatedAtIso : null,
       packingQty,
       packingUpdatedAtIso:
         typeof r.packingUpdatedAtIso === 'string' ? r.packingUpdatedAtIso : null,
@@ -256,6 +266,13 @@ export function getWorkspaceState(): PersistedWorkspaceData {
             factoryUrls: {
               ...(parsed.cuttingSheetSync?.factoryUrls ?? {}),
             },
+            outputSheetUrl:
+              typeof parsed.cuttingSheetSync?.outputSheetUrl === 'string'
+                ? parsed.cuttingSheetSync.outputSheetUrl
+                : '',
+            outputFactoryUrls: {
+              ...(parsed.cuttingSheetSync?.outputFactoryUrls ?? {}),
+            },
             packingSheetUrl:
               typeof parsed.cuttingSheetSync?.packingSheetUrl === 'string'
                 ? parsed.cuttingSheetSync.packingSheetUrl
@@ -348,6 +365,8 @@ export function getPublicWorkspaceState(isAdmin = false) {
       ...state.cuttingSheetSync,
       sheetUrl: '',
       factoryUrls: {},
+      outputSheetUrl: '',
+      outputFactoryUrls: {},
       packingSheetUrl: '',
       packingFactoryUrls: {},
       lastContentHash: '',
@@ -416,6 +435,10 @@ export function getPublicMasterPlanState(factoryFilter?: FactoryName): PublicMas
     precedingRunningEndDateIso: rec.precedingRunningEndDateIso,
     cuttingInputQty: rec.cuttingInputQty,
     cuttingOutputQty: rec.cuttingOutputQty,
+    outputQty: rec.outputQty,
+    balanceToOutput: rec.balanceToOutput,
+    outputStatus: rec.outputStatus,
+    outputUpdatedAtIso: rec.outputUpdatedAtIso ?? null,
     packingQty: rec.packingQty,
     balanceToPack: rec.balanceToPack,
     packingStatus: rec.packingStatus,
@@ -429,6 +452,7 @@ export function getPublicMasterPlanState(factoryFilter?: FactoryName): PublicMas
 
   const hasCuttingData = sanitizedRecords.some((r) => r.cuttingOutputQty > 0);
   const hasCuttingInputColumn = sanitizedRecords.some((r) => r.cuttingInputQty !== null);
+  const hasOutputData = sanitizedRecords.some((r) => r.outputQty !== null);
   const hasPackingData = sanitizedRecords.some((r) => r.packingQty !== null);
 
   return {
@@ -447,6 +471,7 @@ export function getPublicMasterPlanState(factoryFilter?: FactoryName): PublicMas
     cuttingSheetSummary: {
       hasCuttingData,
       hasCuttingInputColumn,
+      hasOutputData,
       hasPackingData,
       lastSyncedAtIso: state.cuttingSheetSync?.lastUpdatedAtIso ?? null,
     },
@@ -701,6 +726,12 @@ export function restoreWorkspaceSnapshot(snapshot: {
           factoryUrls: {
             ...(snapshot.cuttingSheetSync.factoryUrls ?? current.cuttingSheetSync.factoryUrls),
           },
+          outputSheetUrl:
+            snapshot.cuttingSheetSync.outputSheetUrl ?? current.cuttingSheetSync.outputSheetUrl,
+          outputFactoryUrls: {
+            ...(snapshot.cuttingSheetSync.outputFactoryUrls ??
+              current.cuttingSheetSync.outputFactoryUrls),
+          },
           packingSheetUrl:
             snapshot.cuttingSheetSync.packingSheetUrl ?? current.cuttingSheetSync.packingSheetUrl,
           packingFactoryUrls: {
@@ -730,6 +761,10 @@ export function updateCuttingSheetSyncConfig(
       patch.factoryUrls !== undefined
         ? { ...patch.factoryUrls }
         : { ...current.cuttingSheetSync.factoryUrls },
+    outputFactoryUrls:
+      patch.outputFactoryUrls !== undefined
+        ? { ...patch.outputFactoryUrls }
+        : { ...(current.cuttingSheetSync.outputFactoryUrls ?? {}) },
     packingFactoryUrls:
       patch.packingFactoryUrls !== undefined
         ? { ...patch.packingFactoryUrls }
@@ -747,6 +782,46 @@ export function updateCuttingSheetSyncConfig(
   };
   writeStateToDisk(cachedState);
   return nextSync;
+}
+
+export function updateRecordsOutputQty(
+  recordIds: string[],
+  outputQty: number | null
+): { updatedCount: number; updatedAtIso: string; records: PlanningRecord[] } {
+  const current = getWorkspaceState();
+  const idSet = new Set(recordIds);
+  const nowIso = new Date().toISOString();
+  const sanitizedQty =
+    outputQty !== null && Number.isFinite(outputQty) && outputQty >= 0
+      ? Math.round(outputQty)
+      : null;
+
+  let updatedCount = 0;
+  const nextRecords = current.records.map((rec) => {
+    if (!idSet.has(rec.id)) return rec;
+    updatedCount += 1;
+    return {
+      ...rec,
+      outputQty: sanitizedQty,
+      outputUpdatedAtIso: sanitizedQty !== null ? nowIso : null,
+    };
+  });
+
+  if (updatedCount > 0) {
+    cachedState = {
+      ...current,
+      records: nextRecords,
+      hasCustomEdits: true,
+      updatedAtIso: nowIso,
+    };
+    writeStateToDisk(cachedState);
+  }
+
+  return {
+    updatedCount,
+    updatedAtIso: cachedState?.updatedAtIso ?? nowIso,
+    records: nextRecords,
+  };
 }
 
 export function updateRecordsPackingQty(
@@ -795,6 +870,7 @@ export interface RecordSheetPatch {
   plannedQty?: number | null;
   dailyTargetQty?: number | null;
   cuttingInputQty?: number | null;
+  outputQty?: number | null;
   packingQty?: number | null;
   sheetRemark?: string;
   foFullQtyReleased?: boolean;
@@ -820,16 +896,25 @@ export function applySyncedCuttingEntries(params: {
         plannedQty?: number | null;
         dailyTargetQty?: number | null;
         cuttingInputQty?: number | null;
+        outputQty?: number | null;
         packingQty?: number | null;
         sheetRemark?: string;
         foFullQtyReleased?: boolean;
       }
     >();
+    const clearDuplicateOutputIds = new Set<string>();
     const clearDuplicatePackingIds = new Set<string>();
     for (const upd of params.recordUpdates) {
       const primaryId = upd.primaryRecordId || upd.recordIds[0];
       for (const rid of upd.recordIds) {
         const isPrimary = rid === primaryId;
+        if (
+          !isPrimary &&
+          upd.outputQty !== undefined &&
+          upd.outputQty !== null
+        ) {
+          clearDuplicateOutputIds.add(rid);
+        }
         if (
           !isPrimary &&
           upd.packingQty !== undefined &&
@@ -855,6 +940,10 @@ export function applySyncedCuttingEntries(params: {
             isPrimary && upd.cuttingInputQty !== undefined && upd.cuttingInputQty !== null
               ? upd.cuttingInputQty
               : prev.cuttingInputQty,
+          outputQty:
+            isPrimary && upd.outputQty !== undefined && upd.outputQty !== null
+              ? upd.outputQty
+              : prev.outputQty,
           packingQty:
             isPrimary && upd.packingQty !== undefined && upd.packingQty !== null
               ? upd.packingQty
@@ -879,6 +968,21 @@ export function applySyncedCuttingEntries(params: {
           upd.cuttingInputQty !== undefined && upd.cuttingInputQty !== null
             ? upd.cuttingInputQty
             : (rec.cuttingInputQty ?? null);
+        const shouldClearDupOutput =
+          clearDuplicateOutputIds.has(rec.id) &&
+          (upd.outputQty === undefined || upd.outputQty === null);
+        const nextOutputQty =
+          upd.outputQty !== undefined && upd.outputQty !== null
+            ? upd.outputQty
+            : shouldClearDupOutput
+              ? null
+              : (rec.outputQty ?? null);
+        const nextOutputUpdatedAt =
+          upd.outputQty !== undefined && upd.outputQty !== null
+            ? nowIso
+            : shouldClearDupOutput
+              ? null
+              : (rec.outputUpdatedAtIso ?? null);
         const shouldClearDupPack =
           clearDuplicatePackingIds.has(rec.id) &&
           (upd.packingQty === undefined || upd.packingQty === null);
@@ -910,6 +1014,7 @@ export function applySyncedCuttingEntries(params: {
           nextPlanned === rec.plannedQty &&
           nextTarget === rec.dailyTargetQty &&
           nextCuttingInput === (rec.cuttingInputQty ?? null) &&
+          nextOutputQty === (rec.outputQty ?? null) &&
           nextPackingQty === (rec.packingQty ?? null) &&
           nextRemark === (rec.sheetRemark || '') &&
           nextReleased === Boolean(rec.foFullQtyReleased) &&
@@ -925,6 +1030,8 @@ export function applySyncedCuttingEntries(params: {
           foIssueQty: nextIssueQty,
           dailyTargetQty: nextTarget,
           cuttingInputQty: nextCuttingInput,
+          outputQty: nextOutputQty,
+          outputUpdatedAtIso: nextOutputUpdatedAt,
           packingQty: nextPackingQty,
           packingUpdatedAtIso: nextPackingUpdatedAt,
           sheetRemark: nextRemark,
@@ -951,6 +1058,10 @@ export function applySyncedCuttingEntries(params: {
 
   const allSheetEntries = nextEntries.filter((e) => e.source === 'sheet');
   const totalSheetQty = allSheetEntries.reduce((sum, e) => sum + e.cuttingQty, 0);
+  const outputEnteredRecords = nextRecords.filter(
+    (r) => r.outputQty !== null && r.outputQty !== undefined
+  );
+  const totalOutputQty = outputEnteredRecords.reduce((sum, r) => sum + (r.outputQty || 0), 0);
   const packingEnteredRecords = nextRecords.filter(
     (r) => r.packingQty !== null && r.packingQty !== undefined
   );
@@ -975,6 +1086,8 @@ export function applySyncedCuttingEntries(params: {
       params.syncPatch.lastTotalQty !== undefined
         ? params.syncPatch.lastTotalQty
         : totalSheetQty,
+    lastOutputMatchedCount: outputEnteredRecords.length,
+    lastOutputTotalQty: totalOutputQty,
     lastPackingMatchedCount: packingEnteredRecords.length,
     lastPackingTotalQty: totalPackingQty,
     logs: nextLogs,

@@ -51,6 +51,7 @@ import {
   updateAdminPassword,
   updateCuttingSheetSyncConfig,
   updatePlanningWorkspace,
+  updateRecordsOutputQty,
   updateRecordsPackingQty,
   updateReminderRecipient,
   updateReminderSchedule,
@@ -623,6 +624,73 @@ async function startServer() {
     } catch (error) {
       console.error('PATCH /api/packing error:', error);
       res.status(500).json({ error: toSafeClientError(error, 'Failed to update Packing Qty.') });
+    }
+  });
+
+  app.patch('/api/records/:id/output', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { id } = req.params;
+      if (!id || typeof id !== 'string') {
+        res.status(400).json({ error: 'Valid record id is required.' });
+        return;
+      }
+      const parsed = parsePackingQtyInput((req.body as { outputQty?: unknown })?.outputQty);
+      if (!parsed.valid) {
+        res.status(400).json({
+          error: 'Output Qty must be blank or a non-negative integer up to 10,000,000.',
+        });
+        return;
+      }
+      const result = updateRecordsOutputQty([id], parsed.value);
+      if (result.updatedCount === 0) {
+        res.status(404).json({ error: 'Planning record not found.' });
+        return;
+      }
+      res.json({
+        ok: true,
+        updatedCount: result.updatedCount,
+        updatedAtIso: result.updatedAtIso,
+        outputQty: parsed.value,
+      });
+    } catch (error) {
+      console.error('PATCH /api/records/:id/output error:', error);
+      res.status(500).json({ error: toSafeClientError(error, 'Failed to save Output Qty.') });
+    }
+  });
+
+  app.patch('/api/output', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const body = (req.body || {}) as { recordIds?: unknown; outputQty?: unknown };
+      const recordIds = Array.isArray(body.recordIds)
+        ? body.recordIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).slice(0, 100)
+        : [];
+      if (recordIds.length === 0) {
+        res.status(400).json({ error: 'Provide at least one planning record ID.' });
+        return;
+      }
+      const parsed = parsePackingQtyInput(body.outputQty);
+      if (!parsed.valid) {
+        res.status(400).json({
+          error: 'Output Qty must be blank or a non-negative integer up to 10,000,000.',
+        });
+        return;
+      }
+      const result = updateRecordsOutputQty(recordIds, parsed.value);
+      if (result.updatedCount === 0) {
+        res.status(404).json({ error: 'Matching planning records not found.' });
+        return;
+      }
+      res.json({
+        ok: true,
+        updatedCount: result.updatedCount,
+        updatedAtIso: result.updatedAtIso,
+        outputQty: parsed.value,
+      });
+    } catch (error) {
+      console.error('PATCH /api/output error:', error);
+      res.status(500).json({ error: toSafeClientError(error, 'Failed to update Output Qty.') });
     }
   });
 
@@ -1480,6 +1548,8 @@ async function startServer() {
         enabled: boolean;
         sheetUrl: string;
         factoryUrls: FactorySheetUrlMap;
+        outputSheetUrl: string;
+        outputFactoryUrls: FactorySheetUrlMap;
         packingSheetUrl: string;
         packingFactoryUrls: FactorySheetUrlMap;
         syncMode: CuttingSheetSyncMode;
@@ -1492,6 +1562,8 @@ async function startServer() {
           | 'enabled'
           | 'sheetUrl'
           | 'factoryUrls'
+          | 'outputSheetUrl'
+          | 'outputFactoryUrls'
           | 'packingSheetUrl'
           | 'packingFactoryUrls'
           | 'syncMode'
@@ -1531,6 +1603,35 @@ async function startServer() {
         }
         patch.factoryUrls = cleanFactoryUrls;
         if (urlsChanged) {
+          patch.lastContentHash = '';
+        }
+      }
+      if (typeof body.outputSheetUrl === 'string') {
+        const cleanOutUrl = body.outputSheetUrl.trim();
+        if (cleanOutUrl) {
+          await assertSafeExternalUrl(cleanOutUrl);
+        }
+        patch.outputSheetUrl = cleanOutUrl;
+        if (cleanOutUrl !== (currentCfg.outputSheetUrl || '').trim()) {
+          patch.lastContentHash = '';
+        }
+      }
+      if (body.outputFactoryUrls && typeof body.outputFactoryUrls === 'object') {
+        const cleanOutputFactoryUrls: FactorySheetUrlMap = {};
+        let outUrlsChanged = false;
+        for (const fac of ALLOWED_FACTORIES) {
+          const val = body.outputFactoryUrls[fac];
+          const clean = typeof val === 'string' ? val.trim() : '';
+          if (clean) {
+            await assertSafeExternalUrl(clean);
+            cleanOutputFactoryUrls[fac] = clean;
+          }
+          if (clean !== ((currentCfg.outputFactoryUrls || {})[fac] || '').trim()) {
+            outUrlsChanged = true;
+          }
+        }
+        patch.outputFactoryUrls = cleanOutputFactoryUrls;
+        if (outUrlsChanged) {
           patch.lastContentHash = '';
         }
       }
@@ -2080,8 +2181,12 @@ async function startServer() {
       if (!cfg.enabled) return;
       const hasUrl =
         Boolean(cfg.sheetUrl.trim()) ||
+        Boolean((cfg.outputSheetUrl || '').trim()) ||
         Boolean((cfg.packingSheetUrl || '').trim()) ||
         Object.values(cfg.factoryUrls || {}).some((v) => typeof v === 'string' && Boolean(v.trim())) ||
+        Object.values(cfg.outputFactoryUrls || {}).some(
+          (v) => typeof v === 'string' && Boolean(v.trim())
+        ) ||
         Object.values(cfg.packingFactoryUrls || {}).some(
           (v) => typeof v === 'string' && Boolean(v.trim())
         );
