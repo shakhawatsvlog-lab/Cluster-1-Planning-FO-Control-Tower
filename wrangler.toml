@@ -15,7 +15,7 @@ crons = ["*/5 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "alex-control-tower-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "0eda3ccd-7a4a-4994-b338-5a6dfac5ea87"
 
 # Non-secret runtime configuration (never store API keys, passwords, or SESSION_SECRET here)
 [vars]
