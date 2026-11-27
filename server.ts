@@ -78,6 +78,10 @@ import {
   type ShehreenHistoryTurn,
 } from './src/server/shehreenAssistant.ts';
 import {
+  ExtractImageValidationError,
+  extractPoRecordsFromImageCore,
+} from './src/server/extractImageCore.ts';
+import {
   MAX_UPLOAD_BYTES,
   assertSafeExternalUrl,
   checkLoginLockout,
@@ -2050,6 +2054,44 @@ async function startServer() {
           : msgLower.includes('resource_exhausted') || msgLower.includes('429')
             ? 'AI request quota reached. Please try again shortly.'
             : toSafeClientError(error, 'Shehreen AI request failed. Please try again.');
+      res.status(500).json({ ok: false, error: friendlyError });
+    }
+  });
+
+  // Direct-access AI Vision OCR for PO & PG# Matcher Source JPG/PNG/WebP photos
+  app.post('/api/extract-image', assistantLimiter, async (req, res) => {
+    try {
+      const body = (req.body || {}) as {
+        imageBase64?: unknown;
+        mimeType?: unknown;
+      };
+      const result = await extractPoRecordsFromImageCore(
+        {
+          imageBase64: body.imageBase64,
+          mimeType: body.mimeType,
+        },
+        {
+          geminiApiKey: process.env.GEMINI_API_KEY || '',
+        }
+      );
+      res.json({ ok: true, sourceRecords: result.sourceRecords });
+    } catch (error) {
+      if (error instanceof ExtractImageValidationError) {
+        res.status(error.status).json({ ok: false, error: error.message });
+        return;
+      }
+      console.error('POST /api/extract-image error:', error);
+      const rawMsg = error instanceof Error ? error.message : 'Image OCR extraction failed.';
+      const msgLower = rawMsg.toLowerCase();
+      const friendlyError =
+        msgLower.includes('api_key') ||
+        msgLower.includes('permission_denied') ||
+        msgLower.includes('api key') ||
+        msgLower.includes('gemini_api_key')
+          ? 'AI OCR configuration issue. Please verify GEMINI_API_KEY on the server.'
+          : msgLower.includes('resource_exhausted') || msgLower.includes('429')
+            ? 'AI OCR request quota reached. Please try again shortly.'
+            : toSafeClientError(error, 'Failed to read PO slip photo. Please try again.');
       res.status(500).json({ ok: false, error: friendlyError });
     }
   });

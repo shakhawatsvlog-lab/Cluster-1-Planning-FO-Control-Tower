@@ -3,6 +3,7 @@ import {
   ArrowRight,
   CalendarRange,
   Check,
+  FileSearch,
   Loader2,
   Lock,
   ShieldCheck,
@@ -11,13 +12,15 @@ import { buildRouteHref } from '../lib/routes.ts';
 import type { AppPortalRoute } from '../lib/routes.ts';
 import { SiteFooter } from './SiteFooter.tsx';
 
+type PortalDoorRoute = Exclude<AppPortalRoute, 'landing'>;
+
 interface EntryPortalPageProps {
   companyName?: string;
   onNavigate: (route: AppPortalRoute) => void;
 }
 
 interface RippleState {
-  route: 'control_tower' | 'master_plan';
+  route: PortalDoorRoute;
   x: number;
   y: number;
   key: number;
@@ -28,9 +31,7 @@ export function EntryPortalPage({
   onNavigate,
 }: EntryPortalPageProps) {
   const [logoError, setLogoError] = useState(false);
-  const [activatingRoute, setActivatingRoute] = useState<
-    'control_tower' | 'master_plan' | null
-  >(null);
+  const [activatingRoute, setActivatingRoute] = useState<PortalDoorRoute | null>(null);
   const [ripple, setRipple] = useState<RippleState | null>(null);
   const navTimerRef = useRef<number | null>(null);
 
@@ -43,7 +44,7 @@ export function EntryPortalPage({
   }, []);
 
   const triggerPortalActivation = (
-    route: 'control_tower' | 'master_plan',
+    route: PortalDoorRoute,
     clientX?: number,
     clientY?: number,
     targetEl?: HTMLElement | null
@@ -81,7 +82,7 @@ export function EntryPortalPage({
 
   const handleEntryClick = (
     e: React.MouseEvent<HTMLAnchorElement>,
-    route: 'control_tower' | 'master_plan'
+    route: PortalDoorRoute
   ) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
       return;
@@ -195,7 +196,7 @@ export function EntryPortalPage({
 
       {/* Frosted Glass Corporate Header */}
       <header className="relative z-20 ct-header-glass ct-safe-header">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3 sm:gap-4">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3 sm:gap-4">
           <div className="flex items-center gap-3 min-w-0">
             {!logoError ? (
               <img
@@ -227,7 +228,7 @@ export function EntryPortalPage({
 
       {/* Main Entry Canvas */}
       <main className="relative z-10 flex-1 flex flex-col justify-center px-4 sm:px-6 py-10 sm:py-16">
-        <div className="max-w-5xl w-full mx-auto space-y-8 sm:space-y-10">
+        <div className="max-w-6xl w-full mx-auto space-y-8 sm:space-y-10">
           {/* Corporate Title Block */}
           <div className="max-w-2xl space-y-3 robotics-enter">
             <div className="flex items-center gap-2.5">
@@ -243,12 +244,12 @@ export function EntryPortalPage({
               Planning &amp; FO Control Tower
             </h1>
             <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-              Select your workspace entry point below. Planning administrators authenticate through the Control Tower, while factory teams access the live read-only Master Plan directly.
+              Select your workspace entry point below. Planning administrators authenticate through the Control Tower, while factory teams access the live Master Plan or SheetLens directly.
             </p>
           </div>
 
-          {/* Dual Futuristic Glassmorphic Entry Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-7 items-stretch">
+          {/* Three Futuristic Glassmorphic Entry Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
             {/* Option 1: CONTROL TOWER */}
             <div className="robotics-enter-delay-1 flex">
               <section
@@ -487,12 +488,131 @@ export function EntryPortalPage({
                 </a>
               </section>
             </div>
+
+            {/* Option 3: PO & PG# MATCHER */}
+            <div className="robotics-enter-delay-3 flex md:col-span-2 lg:col-span-1">
+              <section
+                aria-labelledby="entry-po-matcher-title"
+                className={`group robotics-portal-card robotics-portal-card-emerald robotics-float-c w-full rounded-2xl p-6 sm:p-7 flex flex-col justify-between gap-6 ${
+                  activatingRoute === 'po_matcher'
+                    ? 'ring-2 ring-emerald-500/70 border-emerald-500'
+                    : activatingRoute !== null
+                      ? 'opacity-70'
+                      : ''
+                }`}
+              >
+                {/* Animated top glowing accent hairline */}
+                <div
+                  className="robotics-border-pulse absolute top-0 inset-x-0 h-[3px] bg-gradient-to-r from-emerald-700 via-teal-500 to-emerald-500"
+                  aria-hidden="true"
+                />
+
+                {/* Hover gradient wash */}
+                <div
+                  className="pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                  style={{
+                    background:
+                      'radial-gradient(420px circle at 90% 0%, rgba(16, 185, 129, 0.1), transparent 65%)',
+                  }}
+                  aria-hidden="true"
+                />
+
+                {/* Diagonal light reflection sweep */}
+                <div className="robotics-light-sweep" aria-hidden="true" />
+
+                {/* Click coordinate ripple + light activation scan */}
+                {ripple && ripple.route === 'po_matcher' && (
+                  <>
+                    <span
+                      key={ripple.key}
+                      className="robotics-ripple-circle bg-emerald-400/30"
+                      style={{ left: ripple.x, top: ripple.y }}
+                      aria-hidden="true"
+                    />
+                    <span
+                      className="robotics-activation-scan"
+                      style={{
+                        background:
+                          'linear-gradient(90deg, transparent, rgba(16, 185, 129, 0.24), transparent)',
+                      }}
+                      aria-hidden="true"
+                    />
+                  </>
+                )}
+
+                <div className="relative z-10 space-y-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="relative w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-600 text-white flex items-center justify-center shrink-0 shadow-[0_8px_20px_-6px_rgba(5,150,105,0.45)] transition-transform duration-300 group-hover:scale-105 group-hover:-rotate-2">
+                      <FileSearch className="w-5 h-5 text-emerald-100 transition-transform duration-300 group-hover:scale-110" />
+                    </div>
+
+                    <div className="flex flex-col items-end gap-1.5">
+                      <div className="text-[11px] font-medium text-emerald-800">
+                        Direct Access · PG# &amp; PO Lookup
+                      </div>
+                      <span
+                        className="h-[2px] w-16 origin-right scale-x-50 bg-gradient-to-r from-transparent to-emerald-500 opacity-30 transition-all duration-300 group-hover:scale-x-100 group-hover:opacity-100"
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <h2
+                      id="entry-po-matcher-title"
+                      className="font-display text-xl font-bold tracking-tight text-slate-950"
+                    >
+                      SheetLens
+                    </h2>
+                    <p className="text-sm text-slate-600 mt-1.5 leading-relaxed">
+                      Upload 5–15 factory Excel sheets and match against a source JPG photo or Excel list to verify which factory is running each PO, Qty, and Final insp. date.
+                    </p>
+                  </div>
+
+                  <ul className="space-y-2 pt-3 border-t border-slate-200/70 text-xs text-slate-700">
+                    <li className="flex items-center gap-2">
+                      <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                      <span>Multi-Workbook Excel Parser (PG# Tabs, PO, Color, Qty &amp; Final insp.)</span>
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                      <span>AI Vision OCR for Source JPG Photos &amp; Source Excel Lookup</span>
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                      <span>Multi-Factory Split Detection &amp; One-Click Excel Result Export</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <a
+                  href={buildRouteHref('po_matcher')}
+                  onClick={(e) => handleEntryClick(e, 'po_matcher')}
+                  aria-disabled={activatingRoute !== null}
+                  className={`relative z-10 w-full h-11 px-4 rounded-xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 hover:from-emerald-800 hover:to-teal-500 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 shadow-[0_10px_24px_-10px_rgba(5,150,105,0.55)] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2 ${
+                    activatingRoute !== null ? 'pointer-events-none opacity-85' : ''
+                  }`}
+                >
+                  {activatingRoute === 'po_matcher' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-emerald-100" />
+                      <span>Opening SheetLens...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Open SheetLens</span>
+                      <ArrowRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-1" />
+                    </>
+                  )}
+                </a>
+              </section>
+            </div>
           </div>
         </div>
       </main>
 
       <SiteFooter
-        maxWidthClass="max-w-5xl"
+        maxWidthClass="max-w-6xl"
         leftContent={
           <span>
             {companyName} — Alpine Egypt Cluster 1 Planning Portal ·{' '}

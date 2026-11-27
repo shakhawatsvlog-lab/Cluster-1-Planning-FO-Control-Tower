@@ -93,6 +93,7 @@ import type { AppPortalRoute } from './lib/routes.ts';
 import { EntryPortalPage } from './components/EntryPortalPage.tsx';
 import { ControlTowerLoginPage } from './components/ControlTowerLoginPage.tsx';
 import { PublicMasterPlanPage } from './components/PublicMasterPlanPage.tsx';
+import { PoMatcherView } from './components/poMatcher/PoMatcherView.tsx';
 import { SiteFooter } from './components/SiteFooter.tsx';
 
 const STORAGE_KEY = 'alex_apparels_cluster1_plan_v2';
@@ -2394,6 +2395,18 @@ export default function App() {
     return (
       <>
         <PublicMasterPlanPage
+          onBackToPortal={() => handleNavigatePortal('landing')}
+        />
+        <OfflineIndicator />
+      </>
+    );
+  }
+
+  if (portalRoute === 'po_matcher') {
+    return (
+      <>
+        <PoMatcherView
+          companyName={siteConfig.companyName}
           onBackToPortal={() => handleNavigatePortal('landing')}
         />
         <OfflineIndicator />

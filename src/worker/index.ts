@@ -31,6 +31,10 @@ import {
   type ShehreenHistoryTurn,
 } from '../server/shehreenCore.ts';
 import {
+  ExtractImageValidationError,
+  extractPoRecordsFromImageCore,
+} from '../server/extractImageCore.ts';
+import {
   buildPlanningWorkbookBuffer,
   buildSelectedFoSummaryBoxWorkbookBuffer,
   buildSelectedUpcomingFoWorkbookBuffer,
@@ -2600,6 +2604,57 @@ export async function handleWorkerFetch(
           : msgLower.includes('resource_exhausted') || msgLower.includes('429')
             ? 'AI request quota reached. Please try again shortly.'
             : toSafeClientErrorWorker(error, 'Shehreen AI request failed. Please try again.');
+      return jsonResponse(request, env, { ok: false, error: friendlyError }, 500);
+    }
+  }
+
+  // =========================================================================
+  // PO & PG# MATCHER — AI VISION OCR FOR SOURCE SLIP PHOTOS
+  // =========================================================================
+  if (method === 'POST' && path === '/api/extract-image') {
+    const limited = await enforceRateLimit(request, env, {
+      name: 'api-assistant',
+      windowMs: 60_000,
+      maxRequests: 25,
+      message: 'Too many image OCR requests. Please wait a minute and try again.',
+    });
+    if (limited) return limited;
+
+    try {
+      const parsedBody = await readJsonBody(request);
+      if (!parsedBody.ok) {
+        return jsonResponse(request, env, { ok: false, error: parsedBody.error }, parsedBody.status);
+      }
+      const body = parsedBody.data as {
+        imageBase64?: unknown;
+        mimeType?: unknown;
+      };
+      const result = await extractPoRecordsFromImageCore(
+        {
+          imageBase64: body.imageBase64,
+          mimeType: body.mimeType,
+        },
+        {
+          geminiApiKey: env.GEMINI_API_KEY || '',
+        }
+      );
+      return jsonResponse(request, env, { ok: true, sourceRecords: result.sourceRecords });
+    } catch (error) {
+      if (error instanceof ExtractImageValidationError) {
+        return jsonResponse(request, env, { ok: false, error: error.message }, error.status);
+      }
+      console.error('POST /api/extract-image error:', error);
+      const rawMsg = error instanceof Error ? error.message : 'Image OCR extraction failed.';
+      const msgLower = rawMsg.toLowerCase();
+      const friendlyError =
+        msgLower.includes('api_key') ||
+        msgLower.includes('permission_denied') ||
+        msgLower.includes('api key') ||
+        msgLower.includes('gemini_api_key')
+          ? 'AI OCR configuration issue. Please verify GEMINI_API_KEY on the server.'
+          : msgLower.includes('resource_exhausted') || msgLower.includes('429')
+            ? 'AI OCR request quota reached. Please try again shortly.'
+            : toSafeClientErrorWorker(error, 'Failed to read PO slip photo. Please try again.');
       return jsonResponse(request, env, { ok: false, error: friendlyError }, 500);
     }
   }

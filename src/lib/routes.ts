@@ -1,4 +1,4 @@
-export type AppPortalRoute = 'landing' | 'control_tower' | 'master_plan';
+export type AppPortalRoute = 'landing' | 'control_tower' | 'master_plan' | 'po_matcher';
 
 const BASE_PREFIX = '/Cluster-1-Planning-FO-Control-Tower';
 
@@ -25,6 +25,9 @@ export function getAppRoute(pathname?: string): AppPortalRoute {
   if (stripped === '/master-plan' || stripped.startsWith('/master-plan/')) {
     return 'master_plan';
   }
+  if (stripped === '/po-matcher' || stripped.startsWith('/po-matcher/')) {
+    return 'po_matcher';
+  }
   return 'landing';
 }
 
@@ -44,6 +47,9 @@ export function buildRouteHref(route: AppPortalRoute): string {
   }
   if (route === 'master_plan') {
     return `${prefix}/master-plan`;
+  }
+  if (route === 'po_matcher') {
+    return `${prefix}/po-matcher`;
   }
   return prefix ? `${prefix}/` : '/';
 }
