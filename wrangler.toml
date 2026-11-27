@@ -1,0 +1,38 @@
+name = "alex-control-tower-api"
+main = "src/worker/index.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Force ExcelJS browser bundle so Node filesystem/unzipper dependencies are excluded
+[alias]
+exceljs = "./node_modules/exceljs/dist/exceljs.min.js"
+
+# Free-tier Cron Trigger: checks scheduled email digests & online cutting sheet auto-sync every 5 minutes
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Cloudflare D1 SQLite Database binding (replace database_id after running `npx wrangler d1 create alex-control-tower-db`)
+[[d1_databases]]
+binding = "DB"
+database_name = "alex-control-tower-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# Non-secret runtime configuration (never store API keys, passwords, or SESSION_SECRET here)
+[vars]
+NODE_ENV = "production"
+APP_URL = "https://shakhawatsvlog-lab.github.io/Cluster-1-Planning-FO-Control-Tower"
+ALLOWED_ORIGINS = "https://shakhawatsvlog-lab.github.io"
+AI_ENABLED = "false"
+EMAIL_ENABLED = "false"
+EMAIL_FROM = "Alex Apparels Planning <noreply@alexapparels.com>"
+
+# ----------------------------------------------------------------------------
+# REQUIRED & OPTIONAL SECRETS (set via `npx wrangler secret put <NAME>`):
+#   SESSION_SECRET         -> Cryptographically random >=32-char string (REQUIRED in production)
+#   ADMIN_PASSWORD         -> Optional initial admin password (or set via Control Panel bootstrap UI)
+#   ADMIN_RECOVERY_EMAIL   -> Optional recovery email for 6-digit password reset OTPs
+#   GEMINI_API_KEY         -> Google Gemini API key (only needed when AI_ENABLED = "true")
+#   RESEND_API_KEY         -> Resend HTTPS email API key (recommended for Workers email delivery)
+#   EMAIL_WEBHOOK_URL      -> Optional HTTPS email relay webhook URL (e.g. Google Apps Script MailApp)
+#   EMAIL_WEBHOOK_SECRET   -> Optional Bearer token sent to EMAIL_WEBHOOK_URL
+# ----------------------------------------------------------------------------
