@@ -175,7 +175,7 @@ function getZonedDateTime(timeZone: string): {
 }
 
 const DEFAULT_PUBLIC_BACKEND_URL =
-  'https://cluster-1-planning-fo-control-tower-9b844.containers.snapdeploy.app';
+  'https://cluster-1-planning-fo-control-tower.shakhawatsvlog.workers.dev';
 
 function getAppPublicUrl(req?: express.Request): string {
   const envUrl = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
