@@ -1,5 +1,10 @@
 import type { DailyCuttingEntry, FactoryName, MasterPlanMeta, PlanningRecord } from '../shared/plannerTypes.ts';
-import type { CuttingSheetSyncConfig, CuttingSheetSyncLog } from '../shared/cuttingSheetTypes.ts';
+import type {
+  CuttingSheetLinkRole,
+  CuttingSheetLinkScope,
+  CuttingSheetSyncConfig,
+  CuttingSheetSyncLog,
+} from '../shared/cuttingSheetTypes.ts';
 import type {
   ReminderDeliveryLog,
   ReminderRecipient,
@@ -20,8 +25,10 @@ import {
   getPublicMasterPlanFromState,
   getPublicWorkspaceFromState,
   getSyncVersionFromState,
+  hasConfiguredSheetLinks,
   hydrateWorkspaceData,
   normalizeRecords,
+  removeCuttingSheetLinkFromConfig,
   verifyPasswordAgainstAuth,
   type PersistedWorkspaceData,
   type RecordSheetPatch,
@@ -242,6 +249,10 @@ export async function updatePlanningWorkspaceD1(
 ): Promise<PersistedWorkspaceData> {
   const current = await getWorkspaceStateD1(env);
   const reason = current.records.length !== data.records.length ? 'before-save' : undefined;
+  const planChanged =
+    current.records.length !== data.records.length ||
+    current.meta.title !== data.meta.title ||
+    current.meta.asOfDateIso !== data.meta.asOfDateIso;
   const next: PersistedWorkspaceData = {
     ...current,
     meta: data.meta,
@@ -250,6 +261,10 @@ export async function updatePlanningWorkspaceD1(
     referenceDateIso: data.referenceDateIso || current.referenceDateIso,
     hasCustomEdits: data.hasCustomEdits,
     updatedAtIso: new Date().toISOString(),
+    cuttingSheetSync:
+      planChanged && hasConfiguredSheetLinks(current.cuttingSheetSync)
+        ? { ...current.cuttingSheetSync, lastContentHash: '' }
+        : current.cuttingSheetSync,
   };
   await saveWorkspaceStateD1(env, next, reason);
   return next;
@@ -269,6 +284,9 @@ export async function resetPlanningWorkspaceD1(env: WorkerEnv): Promise<Persiste
     referenceDateIso: new Date().toISOString().slice(0, 10),
     hasCustomEdits: false,
     updatedAtIso: new Date().toISOString(),
+    cuttingSheetSync: hasConfiguredSheetLinks(current.cuttingSheetSync)
+      ? { ...current.cuttingSheetSync, lastContentHash: '' }
+      : current.cuttingSheetSync,
   };
   await saveWorkspaceStateD1(env, next, 'before-reset');
   return next;
@@ -509,11 +527,41 @@ export async function updateCuttingSheetSyncConfigD1(
   const nextSync: CuttingSheetSyncConfig = {
     ...current.cuttingSheetSync,
     ...patch,
-    factoryStatuses: {
-      ...(current.cuttingSheetSync.factoryStatuses ?? {}),
-      ...(patch.factoryStatuses ?? {}),
-    },
+    factoryUrls:
+      patch.factoryUrls !== undefined
+        ? { ...patch.factoryUrls }
+        : { ...(current.cuttingSheetSync.factoryUrls ?? {}) },
+    outputFactoryUrls:
+      patch.outputFactoryUrls !== undefined
+        ? { ...patch.outputFactoryUrls }
+        : { ...(current.cuttingSheetSync.outputFactoryUrls ?? {}) },
+    packingFactoryUrls:
+      patch.packingFactoryUrls !== undefined
+        ? { ...patch.packingFactoryUrls }
+        : { ...(current.cuttingSheetSync.packingFactoryUrls ?? {}) },
+    factoryStatuses:
+      patch.factoryStatuses !== undefined
+        ? { ...patch.factoryStatuses }
+        : { ...(current.cuttingSheetSync.factoryStatuses ?? {}) },
+    logs: patch.logs !== undefined ? patch.logs : current.cuttingSheetSync.logs,
   };
+  if (patch.enabled === undefined && hasConfiguredSheetLinks(nextSync)) {
+    nextSync.enabled = true;
+  }
+  await saveWorkspaceStateD1(env, {
+    ...current,
+    updatedAtIso: new Date().toISOString(),
+    cuttingSheetSync: nextSync,
+  });
+  return nextSync;
+}
+
+export async function removeCuttingSheetLinkD1(
+  env: WorkerEnv,
+  target: { role: CuttingSheetLinkRole; scope: CuttingSheetLinkScope }
+): Promise<CuttingSheetSyncConfig> {
+  const current = await getWorkspaceStateD1(env);
+  const nextSync = removeCuttingSheetLinkFromConfig(current.cuttingSheetSync, target);
   await saveWorkspaceStateD1(env, {
     ...current,
     updatedAtIso: new Date().toISOString(),

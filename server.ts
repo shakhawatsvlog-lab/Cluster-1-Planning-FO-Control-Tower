@@ -22,6 +22,8 @@ import type {
 } from './src/shared/reminderTypes.ts';
 import type { WebsiteControlConfig } from './src/shared/controlPanelTypes.ts';
 import type {
+  CuttingSheetLinkRole,
+  CuttingSheetLinkScope,
   CuttingSheetSyncConfig,
   CuttingSheetSyncMode,
   FactorySheetUrlMap,
@@ -45,6 +47,7 @@ import {
   getSyncVersionSnapshot,
   getWorkspaceState,
   isAdminPasswordConfigured,
+  removeCuttingSheetLink,
   resetPlanningWorkspace,
   restoreWorkspaceSnapshot,
   saveStoredSmtpConfig,
@@ -1692,10 +1695,46 @@ async function startServer() {
     }
   });
 
+  app.post('/api/cutting-sheet/links/remove', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const body = (req.body || {}) as {
+        role?: string;
+        scope?: string;
+      };
+      const role = body.role;
+      const scope = body.scope;
+      if (role !== 'cutting' && role !== 'output' && role !== 'packing') {
+        res.status(400).json({ error: 'Invalid link role. Expected cutting, output, or packing.' });
+        return;
+      }
+      if (
+        scope !== 'combined' &&
+        !ALLOWED_FACTORIES.includes(scope as FactoryName)
+      ) {
+        res.status(400).json({ error: 'Invalid link scope.' });
+        return;
+      }
+      const cuttingSheetSync = removeCuttingSheetLink({
+        role: role as CuttingSheetLinkRole,
+        scope: scope as CuttingSheetLinkScope,
+      });
+      res.json({ ok: true, cuttingSheetSync });
+    } catch (error) {
+      console.error('POST /api/cutting-sheet/links/remove error:', error);
+      res.status(400).json({
+        error: toSafeClientError(error, 'Failed to remove saved sheet link.'),
+      });
+    }
+  });
+
   app.post('/api/cutting-sheet/sync', uploadSyncLimiter, async (req, res) => {
     if (!requireAdmin(req, res)) return;
     try {
-      const result = await runCuttingSheetSync({ trigger: 'Manual', force: true });
+      const body = (req.body || {}) as { trigger?: string; force?: boolean };
+      const trigger: 'Auto' | 'Manual' = body.trigger === 'Auto' ? 'Auto' : 'Manual';
+      const force = typeof body.force === 'boolean' ? body.force : trigger === 'Manual';
+      const result = await runCuttingSheetSync({ trigger, force });
       res.json({
         ok: result.ok,
         updated: result.updated,

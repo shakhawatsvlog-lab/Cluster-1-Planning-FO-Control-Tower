@@ -52,6 +52,9 @@ export interface CuttingSheetSyncConfig {
   logs: CuttingSheetSyncLog[];
 }
 
+export type CuttingSheetLinkRole = 'cutting' | 'output' | 'packing';
+export type CuttingSheetLinkScope = 'combined' | FactoryName;
+
 export const DEFAULT_CUTTING_SHEET_CONFIG: CuttingSheetSyncConfig = {
   enabled: false,
   sheetUrl: '',
@@ -62,7 +65,7 @@ export const DEFAULT_CUTTING_SHEET_CONFIG: CuttingSheetSyncConfig = {
   packingFactoryUrls: {},
   factoryStatuses: {},
   syncMode: 'auto',
-  intervalMinutes: 60,
+  intervalMinutes: 5,
   lastCheckedAtIso: null,
   lastUpdatedAtIso: null,
   lastStatus: 'Idle',
@@ -79,10 +82,11 @@ export const DEFAULT_CUTTING_SHEET_CONFIG: CuttingSheetSyncConfig = {
 };
 
 export const CUTTING_SYNC_INTERVAL_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 5, label: 'Every 5 minutes' },
+  { value: 1, label: 'Every 1 minute (Live Auto-Sync while open · 5m background)' },
+  { value: 5, label: 'Every 5 minutes (Recommended — Continuous Auto-Sync)' },
   { value: 15, label: 'Every 15 minutes' },
   { value: 30, label: 'Every 30 minutes' },
-  { value: 60, label: 'Every 1 hour (Recommended)' },
+  { value: 60, label: 'Every 1 hour' },
   { value: 360, label: 'Every 6 hours' },
   { value: 1440, label: 'Once Daily (Every 24 hours)' },
 ];

@@ -27,6 +27,8 @@ import { DEFAULT_WEBSITE_CONTROL_CONFIG } from '../shared/controlPanelTypes.ts';
 import type { WebsiteControlConfig } from '../shared/controlPanelTypes.ts';
 import { DEFAULT_CUTTING_SHEET_CONFIG } from '../shared/cuttingSheetTypes.ts';
 import type {
+  CuttingSheetLinkRole,
+  CuttingSheetLinkScope,
   CuttingSheetSyncConfig,
   CuttingSheetSyncLog,
 } from '../shared/cuttingSheetTypes.ts';
@@ -854,15 +856,101 @@ export function applySyncedCuttingToState(
     nextSync.lastTotalQty = totalSheetQty;
   }
 
+  const hashChanged =
+    params.syncPatch.lastContentHash !== undefined &&
+    params.syncPatch.lastContentHash !== current.cuttingSheetSync.lastContentHash;
+  const statusChanged =
+    params.syncPatch.lastStatus !== undefined &&
+    params.syncPatch.lastStatus !== current.cuttingSheetSync.lastStatus;
+  const hasRealChange =
+    params.replaceSheetEntries ||
+    recordsModified ||
+    hashChanged ||
+    statusChanged ||
+    params.logEntry?.status === 'Updated' ||
+    params.logEntry?.status === 'Error';
+
   return {
     ...current,
     records: nextRecords,
     cuttingEntries: nextEntries,
     hasCustomEdits:
       params.replaceSheetEntries || recordsModified ? true : current.hasCustomEdits,
-    updatedAtIso: new Date().toISOString(),
+    updatedAtIso: hasRealChange ? new Date().toISOString() : current.updatedAtIso,
     cuttingSheetSync: nextSync,
   };
+}
+
+export function hasConfiguredSheetLinks(cfg: CuttingSheetSyncConfig): boolean {
+  return (
+    Boolean((cfg.sheetUrl || '').trim()) ||
+    Boolean((cfg.outputSheetUrl || '').trim()) ||
+    Boolean((cfg.packingSheetUrl || '').trim()) ||
+    Object.values(cfg.factoryUrls || {}).some((v) => typeof v === 'string' && Boolean(v.trim())) ||
+    Object.values(cfg.outputFactoryUrls || {}).some(
+      (v) => typeof v === 'string' && Boolean(v.trim())
+    ) ||
+    Object.values(cfg.packingFactoryUrls || {}).some(
+      (v) => typeof v === 'string' && Boolean(v.trim())
+    )
+  );
+}
+
+export function removeCuttingSheetLinkFromConfig(
+  current: CuttingSheetSyncConfig,
+  target: { role: CuttingSheetLinkRole; scope: CuttingSheetLinkScope }
+): CuttingSheetSyncConfig {
+  const nextFactoryUrls = { ...(current.factoryUrls ?? {}) };
+  const nextOutputFactoryUrls = { ...(current.outputFactoryUrls ?? {}) };
+  const nextPackingFactoryUrls = { ...(current.packingFactoryUrls ?? {}) };
+  const nextFactoryStatuses = { ...(current.factoryStatuses ?? {}) };
+  let nextSheetUrl = current.sheetUrl || '';
+  let nextOutputSheetUrl = current.outputSheetUrl || '';
+  let nextPackingSheetUrl = current.packingSheetUrl || '';
+
+  if (target.role === 'cutting') {
+    if (target.scope === 'combined') {
+      nextSheetUrl = '';
+    } else {
+      delete nextFactoryUrls[target.scope];
+      delete nextFactoryStatuses[target.scope];
+    }
+  } else if (target.role === 'output') {
+    if (target.scope === 'combined') {
+      nextOutputSheetUrl = '';
+    } else {
+      delete nextOutputFactoryUrls[target.scope];
+    }
+  } else if (target.role === 'packing') {
+    if (target.scope === 'combined') {
+      nextPackingSheetUrl = '';
+    } else {
+      delete nextPackingFactoryUrls[target.scope];
+    }
+  }
+
+  const nextSync: CuttingSheetSyncConfig = {
+    ...current,
+    sheetUrl: nextSheetUrl,
+    factoryUrls: nextFactoryUrls,
+    outputSheetUrl: nextOutputSheetUrl,
+    outputFactoryUrls: nextOutputFactoryUrls,
+    packingSheetUrl: nextPackingSheetUrl,
+    packingFactoryUrls: nextPackingFactoryUrls,
+    factoryStatuses: nextFactoryStatuses,
+    lastContentHash: '',
+  };
+
+  const stillHasLinks = hasConfiguredSheetLinks(nextSync);
+  if (!stillHasLinks) {
+    nextSync.enabled = false;
+    nextSync.lastStatus = 'Idle';
+    nextSync.lastMessage = 'All online sheet links removed.';
+  } else {
+    nextSync.lastMessage = `Removed ${target.scope === 'combined' ? 'Combined' : target.scope} ${target.role} link. Remaining links remain active.`;
+  }
+
+  return nextSync;
 }
 
 export function applySnapshotRestoreToState(

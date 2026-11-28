@@ -41,7 +41,11 @@ import type {
 import { DEFAULT_WEBSITE_CONTROL_CONFIG } from './shared/controlPanelTypes.ts';
 import type { WebsiteControlConfig } from './shared/controlPanelTypes.ts';
 import { DEFAULT_CUTTING_SHEET_CONFIG } from './shared/cuttingSheetTypes.ts';
-import type { CuttingSheetSyncConfig } from './shared/cuttingSheetTypes.ts';
+import type {
+  CuttingSheetLinkRole,
+  CuttingSheetLinkScope,
+  CuttingSheetSyncConfig,
+} from './shared/cuttingSheetTypes.ts';
 import { Sidebar } from './components/Sidebar.tsx';
 import type { NavTab } from './components/Sidebar.tsx';
 import { FilterToolbar, isRecordInDateRange } from './components/FilterToolbar.tsx';
@@ -64,6 +68,7 @@ import {
   resolveBaseAppLinks,
 } from './components/AppLinkModal.tsx';
 import { OfflineIndicator } from './components/PWAInstallButton.tsx';
+import { SystemUpdatePopup } from './components/SystemUpdatePopup.tsx';
 import {
   ConnectionStatusBadge,
   type SyncConnectionState,
@@ -806,6 +811,111 @@ export default function App() {
       clearReconnectTimer();
     };
   }, [portalRoute, adminUnlocked, buildHeaders, saveLocalBackup, setSessionToken]);
+
+  // Automatic change-detection loop for saved online sheet links while Control Tower is open
+  const autoSheetCheckInFlightRef = useRef(false);
+  const lastAutoSheetAttemptMsRef = useRef(0);
+  const cuttingSheetSyncMetaRef = useRef(cuttingSheetSync);
+  cuttingSheetSyncMetaRef.current = cuttingSheetSync;
+
+  useEffect(() => {
+    if (portalRoute !== 'control_tower' || !adminUnlocked) return;
+    let active = true;
+
+    const hasAnySavedUrl = (cfg: CuttingSheetSyncConfig): boolean =>
+      Boolean((cfg.sheetUrl || '').trim()) ||
+      Boolean((cfg.outputSheetUrl || '').trim()) ||
+      Boolean((cfg.packingSheetUrl || '').trim()) ||
+      Object.values(cfg.factoryUrls || {}).some((v) => typeof v === 'string' && Boolean(v.trim())) ||
+      Object.values(cfg.outputFactoryUrls || {}).some(
+        (v) => typeof v === 'string' && Boolean(v.trim())
+      ) ||
+      Object.values(cfg.packingFactoryUrls || {}).some(
+        (v) => typeof v === 'string' && Boolean(v.trim())
+      );
+
+    const checkSavedLinksForChanges = async () => {
+      if (!active || autoSheetCheckInFlightRef.current || isBrowserOffline()) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (pendingLocalChangesRef.current || syncTimerRef.current !== null) return;
+
+      const cfg = cuttingSheetSyncMetaRef.current;
+      if (!cfg.enabled || !hasAnySavedUrl(cfg)) return;
+
+      const intervalMs = Math.max(1, cfg.intervalMinutes || 5) * 60_000;
+      const lastCheckedMs = cfg.lastCheckedAtIso ? Date.parse(cfg.lastCheckedAtIso) : 0;
+      const elapsedSinceServerCheck =
+        Number.isFinite(lastCheckedMs) && lastCheckedMs > 0
+          ? Date.now() - lastCheckedMs
+          : Infinity;
+      const elapsedSinceClientAttempt = Date.now() - lastAutoSheetAttemptMsRef.current;
+
+      if (elapsedSinceServerCheck < intervalMs || elapsedSinceClientAttempt < 45_000) {
+        return;
+      }
+
+      autoSheetCheckInFlightRef.current = true;
+      lastAutoSheetAttemptMsRef.current = Date.now();
+      try {
+        const res = await fetch(apiUrl('/api/cutting-sheet/sync'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: buildHeaders(true),
+          body: JSON.stringify({ trigger: 'Auto', force: false }),
+        });
+        if (!res.ok || !active) return;
+        const data = (await res.json()) as {
+          ok?: boolean;
+          updated?: boolean;
+          records?: PlanningRecord[];
+          cuttingEntries?: DailyCuttingEntry[];
+          cuttingSheetSync?: CuttingSheetSyncConfig;
+        };
+        if (data.cuttingSheetSync) {
+          setCuttingSheetSync(data.cuttingSheetSync);
+        }
+        if (data.updated) {
+          const nextRecords =
+            Array.isArray(data.records) && data.records.length > 0
+              ? data.records
+              : cuttingSyncRefs.current.records;
+          if (Array.isArray(data.records) && data.records.length > 0) {
+            setRecords(data.records);
+            setHasCustomEdits(true);
+          }
+          const nextCutting = Array.isArray(data.cuttingEntries)
+            ? data.cuttingEntries
+            : undefined;
+          if (nextCutting) {
+            setCuttingEntries(nextCutting);
+            setHasCustomEdits(true);
+          }
+          if (cuttingSyncRefs.current.meta && nextCutting) {
+            saveLocalBackup(cuttingSyncRefs.current.meta, nextRecords, nextCutting);
+          }
+          setLastAdminSyncedAt(formatCurrentTimeLabel());
+        }
+      } catch {
+        // Silent background check; next interval or server cron will retry automatically
+      } finally {
+        autoSheetCheckInFlightRef.current = false;
+      }
+    };
+
+    const initialTimer = window.setTimeout(() => {
+      void checkSavedLinksForChanges();
+    }, 6_000);
+
+    const intervalTimer = window.setInterval(() => {
+      void checkSavedLinksForChanges();
+    }, 30_000);
+
+    return () => {
+      active = false;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalTimer);
+    };
+  }, [portalRoute, adminUnlocked, buildHeaders, saveLocalBackup]);
 
   const isEditingLocked = !adminUnlocked;
 
@@ -1828,22 +1938,66 @@ export default function App() {
     }
   };
 
-  const handleTriggerCuttingSheetSync = async (): Promise<{
+  const handleRemoveCuttingSheetLink = async (
+    role: CuttingSheetLinkRole,
+    scope: CuttingSheetLinkScope
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (isEditingLocked) {
+      promptAdminSignIn('Admin sign-in is required to remove saved online sheet links.');
+      return { ok: false, error: 'Admin sign-in required.' };
+    }
+    try {
+      const res = await fetch(apiUrl('/api/cutting-sheet/links/remove'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: buildHeaders(true),
+        body: JSON.stringify({ role, scope }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        cuttingSheetSync?: CuttingSheetSyncConfig;
+        error?: string;
+      };
+      if (!res.ok || !data.cuttingSheetSync) {
+        return {
+          ok: false,
+          error: data.error || 'Failed to remove saved sheet link.',
+        };
+      }
+      setCuttingSheetSync(data.cuttingSheetSync);
+      return { ok: true };
+    } catch {
+      return {
+        ok: false,
+        error: 'Network error while removing saved sheet link.',
+      };
+    }
+  };
+
+  const handleTriggerCuttingSheetSync = async (options?: {
+    trigger?: 'Auto' | 'Manual';
+    force?: boolean;
+  }): Promise<{
     ok: boolean;
     message: string;
+    updated?: boolean;
   }> => {
     if (isEditingLocked) {
       promptAdminSignIn('Admin sign-in is required to run an online sheet sync.');
       return { ok: false, message: 'Admin sign-in required.' };
     }
+    const trigger = options?.trigger ?? 'Manual';
+    const force = options?.force ?? trigger === 'Manual';
     try {
       const res = await fetch(apiUrl('/api/cutting-sheet/sync'), {
         method: 'POST',
         credentials: 'include',
-        headers: buildHeaders(false),
+        headers: buildHeaders(true),
+        body: JSON.stringify({ trigger, force }),
       });
       const data = (await res.json()) as {
         ok?: boolean;
+        updated?: boolean;
         message?: string;
         error?: string;
         records?: PlanningRecord[];
@@ -1853,24 +2007,27 @@ export default function App() {
       if (data.cuttingSheetSync) {
         setCuttingSheetSync(data.cuttingSheetSync);
       }
-      const nextRecords =
-        Array.isArray(data.records) && data.records.length > 0 ? data.records : records;
-      if (Array.isArray(data.records) && data.records.length > 0) {
-        setRecords(data.records);
-        setHasCustomEdits(true);
-      }
-      const nextCutting = Array.isArray(data.cuttingEntries)
-        ? data.cuttingEntries
-        : cuttingEntries;
-      if (Array.isArray(data.cuttingEntries)) {
-        setCuttingEntries(data.cuttingEntries);
-        setHasCustomEdits(true);
-      }
-      if (meta && (Array.isArray(data.records) || Array.isArray(data.cuttingEntries))) {
-        saveLocalBackup(meta, nextRecords, nextCutting);
+      if (data.updated || trigger === 'Manual') {
+        const nextRecords =
+          Array.isArray(data.records) && data.records.length > 0 ? data.records : records;
+        if (Array.isArray(data.records) && data.records.length > 0) {
+          setRecords(data.records);
+          setHasCustomEdits(true);
+        }
+        const nextCutting = Array.isArray(data.cuttingEntries)
+          ? data.cuttingEntries
+          : cuttingEntries;
+        if (Array.isArray(data.cuttingEntries)) {
+          setCuttingEntries(data.cuttingEntries);
+          setHasCustomEdits(true);
+        }
+        if (meta && (Array.isArray(data.records) || Array.isArray(data.cuttingEntries))) {
+          saveLocalBackup(meta, nextRecords, nextCutting);
+        }
       }
       return {
         ok: Boolean(data.ok),
+        updated: Boolean(data.updated),
         message: data.message || data.error || 'Sheet sync finished.',
       };
     } catch {
@@ -2387,6 +2544,7 @@ export default function App() {
           onNavigate={handleNavigatePortal}
         />
         <OfflineIndicator />
+        <SystemUpdatePopup />
       </>
     );
   }
@@ -2398,6 +2556,7 @@ export default function App() {
           onBackToPortal={() => handleNavigatePortal('landing')}
         />
         <OfflineIndicator />
+        <SystemUpdatePopup />
       </>
     );
   }
@@ -2410,6 +2569,7 @@ export default function App() {
           onBackToPortal={() => handleNavigatePortal('landing')}
         />
         <OfflineIndicator />
+        <SystemUpdatePopup />
       </>
     );
   }
@@ -2431,6 +2591,7 @@ export default function App() {
           }}
         />
         <OfflineIndicator />
+        <SystemUpdatePopup />
       </>
     );
   }
@@ -2754,6 +2915,7 @@ export default function App() {
                   referenceDateIso={referenceDateIso}
                   cuttingSheetSync={cuttingSheetSync}
                   onSaveCuttingSheetConfig={handleSaveCuttingSheetConfig}
+                  onRemoveCuttingSheetLink={handleRemoveCuttingSheetLink}
                   onSyncCuttingSheetNow={handleTriggerCuttingSheetSync}
                   onUploadCuttingFile={handleUploadCuttingFile}
                   onAddCuttingEntry={handleAddCuttingEntry}
@@ -3038,6 +3200,7 @@ export default function App() {
       )}
 
       <OfflineIndicator />
+      <SystemUpdatePopup />
     </div>
   );
 }

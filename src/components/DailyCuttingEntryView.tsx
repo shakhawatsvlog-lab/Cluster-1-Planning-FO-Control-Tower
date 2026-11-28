@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Copy,
   Download,
+  ExternalLink,
   FileSpreadsheet,
   Link2,
   Plus,
@@ -13,6 +16,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import { copyTextWithFallback } from './AppLinkModal.tsx';
 import {
   ALLOWED_FACTORIES,
   ORDER_STATUS_OPTIONS,
@@ -28,6 +32,8 @@ import type {
 } from '../shared/plannerTypes.ts';
 import { CUTTING_SYNC_INTERVAL_OPTIONS } from '../shared/cuttingSheetTypes.ts';
 import type {
+  CuttingSheetLinkRole,
+  CuttingSheetLinkScope,
   CuttingSheetSyncConfig,
   CuttingSheetSyncMode,
   FactorySheetUrlMap,
@@ -55,7 +61,14 @@ interface DailyCuttingEntryViewProps {
       >
     >
   ) => Promise<{ ok: boolean; error?: string }>;
-  onSyncCuttingSheetNow: () => Promise<{ ok: boolean; message: string }>;
+  onRemoveCuttingSheetLink?: (
+    role: CuttingSheetLinkRole,
+    scope: CuttingSheetLinkScope
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onSyncCuttingSheetNow: (options?: {
+    trigger?: 'Auto' | 'Manual';
+    force?: boolean;
+  }) => Promise<{ ok: boolean; message: string; updated?: boolean }>;
   onUploadCuttingFile: (
     file: File,
     factoryOverride?: FactoryName
@@ -88,6 +101,7 @@ export function DailyCuttingEntryView({
   referenceDateIso,
   cuttingSheetSync,
   onSaveCuttingSheetConfig,
+  onRemoveCuttingSheetLink,
   onSyncCuttingSheetNow,
   onUploadCuttingFile,
   onAddCuttingEntry,
@@ -97,6 +111,14 @@ export function DailyCuttingEntryView({
   onUpdatePackingQty,
   onSetRunningStyle,
 }: DailyCuttingEntryViewProps) {
+  const hasSavedLinksInitial =
+    Boolean((cuttingSheetSync.sheetUrl || '').trim()) ||
+    Boolean((cuttingSheetSync.outputSheetUrl || '').trim()) ||
+    Boolean((cuttingSheetSync.packingSheetUrl || '').trim()) ||
+    ALLOWED_FACTORIES.some((fac) => Boolean((cuttingSheetSync.factoryUrls?.[fac] || '').trim())) ||
+    ALLOWED_FACTORIES.some((fac) => Boolean((cuttingSheetSync.outputFactoryUrls?.[fac] || '').trim())) ||
+    ALLOWED_FACTORIES.some((fac) => Boolean((cuttingSheetSync.packingFactoryUrls?.[fac] || '').trim()));
+
   // Online Cutting, Output & Packing Sheet Sync draft state
   const [sheetEnabled, setSheetEnabled] = useState(cuttingSheetSync.enabled);
   const [sheetUrlInput, setSheetUrlInput] = useState(cuttingSheetSync.sheetUrl);
@@ -119,7 +141,11 @@ export function DailyCuttingEntryView({
     cuttingSheetSync.syncMode
   );
   const [intervalInput, setIntervalInput] = useState<number>(
-    cuttingSheetSync.intervalMinutes || 60
+    !hasSavedLinksInitial &&
+      cuttingSheetSync.intervalMinutes === 60 &&
+      !cuttingSheetSync.lastCheckedAtIso
+      ? 5
+      : cuttingSheetSync.intervalMinutes || 5
   );
   const [showMainUrl, setShowMainUrl] = useState<boolean>(() =>
     Boolean(cuttingSheetSync.sheetUrl.trim())
@@ -146,37 +172,131 @@ export function DailyCuttingEntryView({
   const [uploadingFile, setUploadingFile] = useState(false);
   const [uploadFactoryOverride, setUploadFactoryOverride] = useState<FactoryName | 'AUTO'>('AUTO');
   const [syncNotice, setSyncNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
+  const [deletingLinkKey, setDeletingLinkKey] = useState<string | null>(null);
+  const [copiedLinkKey, setCopiedLinkKey] = useState<string | null>(null);
   const cuttingFileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Track last-known server values so 15s background polling only updates fields whose server value changed and weren't edited locally
+  const prevServerUrlsRef = useRef({
+    enabled: cuttingSheetSync.enabled,
+    sheetUrl: cuttingSheetSync.sheetUrl || '',
+    factoryUrls: { ...(cuttingSheetSync.factoryUrls || {}) } as FactorySheetUrlMap,
+    outputSheetUrl: cuttingSheetSync.outputSheetUrl || '',
+    outputFactoryUrls: { ...(cuttingSheetSync.outputFactoryUrls || {}) } as FactorySheetUrlMap,
+    packingSheetUrl: cuttingSheetSync.packingSheetUrl || '',
+    packingFactoryUrls: { ...(cuttingSheetSync.packingFactoryUrls || {}) } as FactorySheetUrlMap,
+    syncMode: cuttingSheetSync.syncMode,
+    intervalMinutes: cuttingSheetSync.intervalMinutes || 5,
+  });
+
   useEffect(() => {
-    setSheetEnabled(cuttingSheetSync.enabled);
-    setSheetUrlInput(cuttingSheetSync.sheetUrl);
-    setFactoryUrlsInput(cuttingSheetSync.factoryUrls || {});
-    setOutputSheetUrlInput(cuttingSheetSync.outputSheetUrl || '');
-    setOutputFactoryUrlsInput(cuttingSheetSync.outputFactoryUrls || {});
-    setPackingSheetUrlInput(cuttingSheetSync.packingSheetUrl || '');
-    setPackingFactoryUrlsInput(cuttingSheetSync.packingFactoryUrls || {});
-    setSyncModeInput(cuttingSheetSync.syncMode);
-    setIntervalInput(cuttingSheetSync.intervalMinutes || 60);
-    if (cuttingSheetSync.sheetUrl.trim()) {
-      setShowMainUrl(true);
+    const prev = prevServerUrlsRef.current;
+
+    if (cuttingSheetSync.enabled !== prev.enabled) {
+      setSheetEnabled(cuttingSheetSync.enabled);
     }
-    if (
-      (cuttingSheetSync.outputSheetUrl || '').trim() ||
-      ALLOWED_FACTORIES.some((fac) =>
-        Boolean((cuttingSheetSync.outputFactoryUrls?.[fac] || '').trim())
-      )
-    ) {
-      setShowOutputUrls(true);
+
+    const nextSheetUrl = cuttingSheetSync.sheetUrl || '';
+    if (nextSheetUrl !== prev.sheetUrl) {
+      setSheetUrlInput((cur) => (cur === prev.sheetUrl ? nextSheetUrl : cur));
+      if (nextSheetUrl.trim()) setShowMainUrl(true);
     }
-    if (
-      (cuttingSheetSync.packingSheetUrl || '').trim() ||
-      ALLOWED_FACTORIES.some((fac) =>
-        Boolean((cuttingSheetSync.packingFactoryUrls?.[fac] || '').trim())
-      )
-    ) {
-      setShowPackingUrls(true);
+
+    const nextFacUrls = cuttingSheetSync.factoryUrls || {};
+    const facServerChanged = ALLOWED_FACTORIES.some(
+      (f) => (nextFacUrls[f] || '') !== (prev.factoryUrls[f] || '')
+    );
+    if (facServerChanged) {
+      setFactoryUrlsInput((cur) => {
+        const merged: FactorySheetUrlMap = { ...cur };
+        for (const f of ALLOWED_FACTORIES) {
+          const prevVal = prev.factoryUrls[f] || '';
+          const nextVal = nextFacUrls[f] || '';
+          if (nextVal !== prevVal && (cur[f] || '') === prevVal) {
+            if (nextVal) merged[f] = nextVal;
+            else delete merged[f];
+          }
+        }
+        return merged;
+      });
     }
+
+    const nextOutUrl = cuttingSheetSync.outputSheetUrl || '';
+    if (nextOutUrl !== prev.outputSheetUrl) {
+      setOutputSheetUrlInput((cur) => (cur === prev.outputSheetUrl ? nextOutUrl : cur));
+      if (nextOutUrl.trim()) setShowOutputUrls(true);
+    }
+
+    const nextOutFacUrls = cuttingSheetSync.outputFactoryUrls || {};
+    const outFacServerChanged = ALLOWED_FACTORIES.some(
+      (f) => (nextOutFacUrls[f] || '') !== (prev.outputFactoryUrls[f] || '')
+    );
+    if (outFacServerChanged) {
+      setOutputFactoryUrlsInput((cur) => {
+        const merged: FactorySheetUrlMap = { ...cur };
+        for (const f of ALLOWED_FACTORIES) {
+          const prevVal = prev.outputFactoryUrls[f] || '';
+          const nextVal = nextOutFacUrls[f] || '';
+          if (nextVal !== prevVal && (cur[f] || '') === prevVal) {
+            if (nextVal) merged[f] = nextVal;
+            else delete merged[f];
+          }
+        }
+        return merged;
+      });
+      if (ALLOWED_FACTORIES.some((f) => Boolean((nextOutFacUrls[f] || '').trim()))) {
+        setShowOutputUrls(true);
+      }
+    }
+
+    const nextPackUrl = cuttingSheetSync.packingSheetUrl || '';
+    if (nextPackUrl !== prev.packingSheetUrl) {
+      setPackingSheetUrlInput((cur) => (cur === prev.packingSheetUrl ? nextPackUrl : cur));
+      if (nextPackUrl.trim()) setShowPackingUrls(true);
+    }
+
+    const nextPackFacUrls = cuttingSheetSync.packingFactoryUrls || {};
+    const packFacServerChanged = ALLOWED_FACTORIES.some(
+      (f) => (nextPackFacUrls[f] || '') !== (prev.packingFactoryUrls[f] || '')
+    );
+    if (packFacServerChanged) {
+      setPackingFactoryUrlsInput((cur) => {
+        const merged: FactorySheetUrlMap = { ...cur };
+        for (const f of ALLOWED_FACTORIES) {
+          const prevVal = prev.packingFactoryUrls[f] || '';
+          const nextVal = nextPackFacUrls[f] || '';
+          if (nextVal !== prevVal && (cur[f] || '') === prevVal) {
+            if (nextVal) merged[f] = nextVal;
+            else delete merged[f];
+          }
+        }
+        return merged;
+      });
+      if (ALLOWED_FACTORIES.some((f) => Boolean((nextPackFacUrls[f] || '').trim()))) {
+        setShowPackingUrls(true);
+      }
+    }
+
+    if (cuttingSheetSync.syncMode !== prev.syncMode) {
+      setSyncModeInput((cur) => (cur === prev.syncMode ? cuttingSheetSync.syncMode : cur));
+    }
+    const nextInterval = cuttingSheetSync.intervalMinutes || 5;
+    if (nextInterval !== prev.intervalMinutes) {
+      setIntervalInput((cur) => (cur === prev.intervalMinutes ? nextInterval : cur));
+    }
+
+    prevServerUrlsRef.current = {
+      enabled: cuttingSheetSync.enabled,
+      sheetUrl: nextSheetUrl,
+      factoryUrls: { ...nextFacUrls },
+      outputSheetUrl: nextOutUrl,
+      outputFactoryUrls: { ...nextOutFacUrls },
+      packingSheetUrl: nextPackUrl,
+      packingFactoryUrls: { ...nextPackFacUrls },
+      syncMode: cuttingSheetSync.syncMode,
+      intervalMinutes: nextInterval,
+    };
   }, [
     cuttingSheetSync.enabled,
     cuttingSheetSync.sheetUrl,
@@ -262,6 +382,100 @@ export function DailyCuttingEntryView({
     ]
   );
 
+  const savedLinksList = useMemo(() => {
+    const items: Array<{
+      key: string;
+      role: CuttingSheetLinkRole;
+      scope: CuttingSheetLinkScope;
+      roleLabel: string;
+      scopeLabel: string;
+      url: string;
+      factoryStatus?: CuttingSheetSyncConfig['factoryStatuses'][FactoryName];
+    }> = [];
+
+    for (const fac of ALLOWED_FACTORIES) {
+      const url = (cuttingSheetSync.factoryUrls?.[fac] || '').trim();
+      if (url) {
+        items.push({
+          key: `cutting::${fac}`,
+          role: 'cutting',
+          scope: fac,
+          roleLabel: 'Cutting',
+          scopeLabel: fac,
+          url,
+          factoryStatus: cuttingSheetSync.factoryStatuses?.[fac],
+        });
+      }
+    }
+    if ((cuttingSheetSync.sheetUrl || '').trim()) {
+      items.push({
+        key: 'cutting::combined',
+        role: 'cutting',
+        scope: 'combined',
+        roleLabel: 'Cutting / Combined',
+        scopeLabel: 'All Factories',
+        url: cuttingSheetSync.sheetUrl.trim(),
+      });
+    }
+    for (const fac of ALLOWED_FACTORIES) {
+      const url = (cuttingSheetSync.outputFactoryUrls?.[fac] || '').trim();
+      if (url) {
+        items.push({
+          key: `output::${fac}`,
+          role: 'output',
+          scope: fac,
+          roleLabel: 'Output',
+          scopeLabel: fac,
+          url,
+          factoryStatus: cuttingSheetSync.factoryStatuses?.[fac],
+        });
+      }
+    }
+    if ((cuttingSheetSync.outputSheetUrl || '').trim()) {
+      items.push({
+        key: 'output::combined',
+        role: 'output',
+        scope: 'combined',
+        roleLabel: 'Output',
+        scopeLabel: 'All Factories',
+        url: cuttingSheetSync.outputSheetUrl.trim(),
+      });
+    }
+    for (const fac of ALLOWED_FACTORIES) {
+      const url = (cuttingSheetSync.packingFactoryUrls?.[fac] || '').trim();
+      if (url) {
+        items.push({
+          key: `packing::${fac}`,
+          role: 'packing',
+          scope: fac,
+          roleLabel: 'Packing',
+          scopeLabel: fac,
+          url,
+          factoryStatus: cuttingSheetSync.factoryStatuses?.[fac],
+        });
+      }
+    }
+    if ((cuttingSheetSync.packingSheetUrl || '').trim()) {
+      items.push({
+        key: 'packing::combined',
+        role: 'packing',
+        scope: 'combined',
+        roleLabel: 'Packing',
+        scopeLabel: 'All Factories',
+        url: cuttingSheetSync.packingSheetUrl.trim(),
+      });
+    }
+    return items;
+  }, [
+    cuttingSheetSync.factoryUrls,
+    cuttingSheetSync.sheetUrl,
+    cuttingSheetSync.outputFactoryUrls,
+    cuttingSheetSync.outputSheetUrl,
+    cuttingSheetSync.packingFactoryUrls,
+    cuttingSheetSync.packingSheetUrl,
+    cuttingSheetSync.factoryStatuses,
+  ]);
+
   const handleSaveSheetSetup = async (overrideEnabled?: boolean) => {
     setSavingConfig(true);
     setSyncNotice(null);
@@ -286,12 +500,25 @@ export function DailyCuttingEntryView({
     setSavingConfig(false);
     if (res.ok) {
       setSheetEnabled(nextEnabled);
-      setSyncNotice({
-        ok: true,
-        text: nextEnabled
-          ? 'All factory cutting, output & packing links saved — Auto-Sync enabled.'
-          : 'Online sheet settings saved (Auto-Sync paused).',
-      });
+      if (nextEnabled && hasAnyDraftUrl && overrideEnabled === undefined) {
+        // Immediately collect data after saving new/updated links so user sees results right away
+        setSyncingNow(true);
+        const syncRes = await onSyncCuttingSheetNow({ trigger: 'Manual', force: true });
+        setSyncingNow(false);
+        setSyncNotice({
+          ok: syncRes.ok,
+          text: syncRes.ok
+            ? `Links permanently saved & auto-sync active — ${syncRes.message}`
+            : `Links permanently saved (auto-sync active). First sync check: ${syncRes.message}`,
+        });
+      } else {
+        setSyncNotice({
+          ok: true,
+          text: nextEnabled
+            ? 'All factory cutting, output & packing links saved permanently — Auto-Sync active.'
+            : 'Online sheet settings saved (Auto-Sync paused).',
+        });
+      }
     } else {
       setSyncNotice({
         ok: false,
@@ -299,6 +526,69 @@ export function DailyCuttingEntryView({
       });
     }
     return res.ok;
+  };
+
+  const handleDeleteSavedLink = async (
+    key: string,
+    role: CuttingSheetLinkRole,
+    scope: CuttingSheetLinkScope
+  ) => {
+    if (!onRemoveCuttingSheetLink) return;
+    setDeletingLinkKey(key);
+    setSyncNotice(null);
+    const res = await onRemoveCuttingSheetLink(role, scope);
+    setDeletingLinkKey(null);
+    setConfirmDeleteKey(null);
+
+    if (res.ok) {
+      if (role === 'cutting') {
+        if (scope === 'combined') setSheetUrlInput('');
+        else {
+          setFactoryUrlsInput((prev) => {
+            const copy = { ...prev };
+            delete copy[scope];
+            return copy;
+          });
+        }
+      } else if (role === 'output') {
+        if (scope === 'combined') setOutputSheetUrlInput('');
+        else {
+          setOutputFactoryUrlsInput((prev) => {
+            const copy = { ...prev };
+            delete copy[scope];
+            return copy;
+          });
+        }
+      } else if (role === 'packing') {
+        if (scope === 'combined') setPackingSheetUrlInput('');
+        else {
+          setPackingFactoryUrlsInput((prev) => {
+            const copy = { ...prev };
+            delete copy[scope];
+            return copy;
+          });
+        }
+      }
+      setSyncNotice({
+        ok: true,
+        text: `Removed ${scope === 'combined' ? 'All Factories' : scope} ${role} link permanently. Any remaining saved links stay active.`,
+      });
+    } else {
+      setSyncNotice({
+        ok: false,
+        text: res.error || 'Failed to delete saved sheet link.',
+      });
+    }
+  };
+
+  const handleCopySavedLink = async (key: string, url: string) => {
+    const copied = await copyTextWithFallback(url);
+    if (copied) {
+      setCopiedLinkKey(key);
+      window.setTimeout(() => {
+        setCopiedLinkKey((cur) => (cur === key ? null : cur));
+      }, 1800);
+    }
   };
 
   const handleTriggerSyncNow = async () => {
@@ -341,7 +631,7 @@ export function DailyCuttingEntryView({
       setSheetEnabled(desiredEnabled);
     }
 
-    const res = await onSyncCuttingSheetNow();
+    const res = await onSyncCuttingSheetNow({ trigger: 'Manual', force: true });
     setSyncingNow(false);
     setSyncNotice({ ok: res.ok, text: res.message });
   };
@@ -667,15 +957,156 @@ export function DailyCuttingEntryView({
           </div>
         </div>
 
+        {/* Always-Visible Saved Permanent Links Directory */}
+        <div className="bg-slate-950/65 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-white">
+              <Link2 className="w-3.5 h-3.5 text-emerald-300" />
+              <span>Saved Permanent Online Links ({savedLinksList.length})</span>
+              {savedLinksList.length > 0 && (
+                <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-400/35 text-emerald-200 text-[10px] font-semibold">
+                  Saved Permanently Until Deleted
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] text-slate-400">
+              {savedLinksList.length > 0
+                ? cuttingSheetSync.enabled
+                  ? `Auto-checking every ${cuttingSheetSync.intervalMinutes || 5} min · Any sheet edit updates automatically`
+                  : 'Auto-sync paused (links remain safely stored)'
+                : 'Add your sheet links once below — never needs re-entry'}
+            </span>
+          </div>
+
+          {savedLinksList.length === 0 ? (
+            <div className="text-xs text-slate-400 bg-slate-900/60 border border-dashed border-slate-700/80 rounded-lg px-3 py-2.5">
+              No permanent sheet links saved yet. Paste any Google Sheets or SharePoint Excel link below and click <strong className="text-slate-200">Save Links</strong> — the system will save it permanently and automatically detect &amp; collect updates whenever the sheet changes.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {savedLinksList.map((item) => {
+                const isConfirming = confirmDeleteKey === item.key;
+                const isDeleting = deletingLinkKey === item.key;
+                const isCopied = copiedLinkKey === item.key;
+                const roleBadgeClass =
+                  item.role === 'output'
+                    ? 'bg-teal-500/20 border-teal-400/35 text-teal-200'
+                    : item.role === 'packing'
+                      ? 'bg-cyan-500/20 border-cyan-400/35 text-cyan-200'
+                      : 'bg-blue-500/20 border-blue-400/35 text-blue-200';
+                return (
+                  <div
+                    key={item.key}
+                    className="bg-slate-900/80 border border-slate-800 rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                  >
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${roleBadgeClass}`}>
+                          {item.roleLabel}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 font-mono text-[10px] font-semibold">
+                          {item.scopeLabel}
+                        </span>
+                        {item.factoryStatus?.status === 'Error' ? (
+                          <span className="text-[10px] text-amber-300 font-medium">
+                            · {item.factoryStatus.message}
+                          </span>
+                        ) : item.factoryStatus?.lastSyncedAtIso ? (
+                          <span className="text-[10px] text-emerald-300">
+                            · Checked {new Date(item.factoryStatus.lastSyncedAtIso).toLocaleTimeString()}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400">· Active permanent link</span>
+                        )}
+                      </div>
+                      <div
+                        className="font-mono text-[11px] text-slate-200 break-all select-all"
+                        title={item.url}
+                      >
+                        {item.url}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => void handleCopySavedLink(item.key, item.url)}
+                        className="h-7 px-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-medium inline-flex items-center gap-1 cursor-pointer transition-colors"
+                        title="Copy saved link"
+                      >
+                        {isCopied ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-400" />
+                            <span>Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>Copy</span>
+                          </>
+                        )}
+                      </button>
+
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="h-7 px-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-medium inline-flex items-center gap-1 transition-colors"
+                        title="Open online sheet in new tab"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Open</span>
+                      </a>
+
+                      {onRemoveCuttingSheetLink && (
+                        isConfirming ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={isDeleting}
+                              onClick={() => void handleDeleteSavedLink(item.key, item.role, item.scope)}
+                              className="h-7 px-2 rounded bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-[11px] font-semibold cursor-pointer transition-colors"
+                            >
+                              {isDeleting ? 'Deleting...' : 'Confirm Delete'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isDeleting}
+                              onClick={() => setConfirmDeleteKey(null)}
+                              className="h-7 px-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[11px] cursor-pointer transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteKey(item.key)}
+                            className="h-7 px-2 rounded bg-red-950/60 hover:bg-red-900/70 border border-red-800/70 text-red-200 text-[11px] font-medium inline-flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Manually delete this saved link"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Delete</span>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* 4-Factory Auto-Sync Links + Schedule Controls */}
         <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-3.5 space-y-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-semibold text-white flex items-center gap-1.5">
               <Link2 className="w-3.5 h-3.5 text-blue-300" />
-              <span>4 Factory Online Sheet Links (Save Once — Auto-Checked on Schedule)</span>
+              <span>Add / Edit Permanent Factory Sheet Links (Save Once — Auto-Detects Changes)</span>
             </div>
             <span className="text-[11px] text-slate-400">
-              Each factory syncs independently so other factories&apos; data is always preserved
+              Links stay permanently saved until you delete them above
             </span>
           </div>
 

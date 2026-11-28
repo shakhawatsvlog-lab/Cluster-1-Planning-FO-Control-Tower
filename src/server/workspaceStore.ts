@@ -17,6 +17,8 @@ import type {
 } from '../shared/reminderTypes.ts';
 import type { WebsiteControlConfig } from '../shared/controlPanelTypes.ts';
 import type {
+  CuttingSheetLinkRole,
+  CuttingSheetLinkScope,
   CuttingSheetSyncConfig,
   CuttingSheetSyncLog,
 } from '../shared/cuttingSheetTypes.ts';
@@ -33,9 +35,11 @@ import {
   getPublicMasterPlanFromState,
   getPublicWorkspaceFromState,
   getSyncVersionFromState,
+  hasConfiguredSheetLinks,
   hydrateWorkspaceData,
   loadDefaultMasterPlanFromString,
   normalizeRecords,
+  removeCuttingSheetLinkFromConfig,
   verifyPasswordAgainstAuth,
   type AdminAuthStored,
   type PersistedWorkspaceData,
@@ -245,6 +249,10 @@ export function updatePlanningWorkspace(patch: {
   hasCustomEdits?: boolean;
 }): PersistedWorkspaceData {
   const current = getWorkspaceState();
+  const planChanged =
+    current.records.length !== patch.records.length ||
+    current.meta.title !== patch.meta.title ||
+    current.meta.asOfDateIso !== patch.meta.asOfDateIso;
   const next: PersistedWorkspaceData = {
     ...current,
     meta: patch.meta,
@@ -253,6 +261,10 @@ export function updatePlanningWorkspace(patch: {
     referenceDateIso: patch.referenceDateIso || current.referenceDateIso,
     hasCustomEdits: patch.hasCustomEdits ?? true,
     updatedAtIso: new Date().toISOString(),
+    cuttingSheetSync:
+      planChanged && hasConfiguredSheetLinks(current.cuttingSheetSync)
+        ? { ...current.cuttingSheetSync, lastContentHash: '' }
+        : current.cuttingSheetSync,
   };
   cachedState = next;
   writeStateToDisk(next);
@@ -270,6 +282,9 @@ export function resetPlanningWorkspace(): PersistedWorkspaceData {
     cuttingEntries: [],
     hasCustomEdits: false,
     updatedAtIso: new Date().toISOString(),
+    cuttingSheetSync: hasConfiguredSheetLinks(current.cuttingSheetSync)
+      ? { ...current.cuttingSheetSync, lastContentHash: '' }
+      : current.cuttingSheetSync,
   };
   cachedState = next;
   writeStateToDisk(next);
@@ -318,6 +333,24 @@ export function updateCuttingSheetSyncConfig(
         : { ...(current.cuttingSheetSync.factoryStatuses ?? {}) },
     logs: patch.logs !== undefined ? patch.logs : current.cuttingSheetSync.logs,
   };
+  if (patch.enabled === undefined && hasConfiguredSheetLinks(nextSync)) {
+    nextSync.enabled = true;
+  }
+  cachedState = {
+    ...current,
+    updatedAtIso: new Date().toISOString(),
+    cuttingSheetSync: nextSync,
+  };
+  writeStateToDisk(cachedState);
+  return nextSync;
+}
+
+export function removeCuttingSheetLink(target: {
+  role: CuttingSheetLinkRole;
+  scope: CuttingSheetLinkScope;
+}): CuttingSheetSyncConfig {
+  const current = getWorkspaceState();
+  const nextSync = removeCuttingSheetLinkFromConfig(current.cuttingSheetSync, target);
   cachedState = {
     ...current,
     updatedAtIso: new Date().toISOString(),

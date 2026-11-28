@@ -2023,6 +2023,8 @@ async function fetchSheetPayloadOnce(targetUrl: string, assertUrlSafe: (url: str
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain,*/*',
         'User-Agent':
           'Mozilla/5.0 (compatible; AlexApparels-Planning-Sync/1.0)',
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        Pragma: 'no-cache',
       };
       if (cookieJar.size > 0) {
         reqHeaders.Cookie = buildCookieHeader(cookieJar);

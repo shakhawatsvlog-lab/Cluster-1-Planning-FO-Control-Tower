@@ -6,9 +6,13 @@ import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 const APP_BASE = '/Cluster-1-Planning-FO-Control-Tower/';
+const buildCommit = (process.env.GITHUB_SHA || '').trim().slice(0, 7);
 
 export default defineConfig(() => {
   return {
+    define: {
+      'import.meta.env.VITE_APP_BUILD_ID': JSON.stringify(buildCommit),
+    },
     plugins: [
       react(),
       tailwindcss(),

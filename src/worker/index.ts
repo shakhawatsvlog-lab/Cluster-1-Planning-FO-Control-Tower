@@ -18,6 +18,8 @@ import type {
 } from '../shared/reminderTypes.ts';
 import type { WebsiteControlConfig } from '../shared/controlPanelTypes.ts';
 import type {
+  CuttingSheetLinkRole,
+  CuttingSheetLinkScope,
   CuttingSheetSyncConfig,
   CuttingSheetSyncMode,
   FactorySheetUrlMap,
@@ -57,6 +59,7 @@ import {
   getWorkspaceStateD1,
   incrementPendingOtpAttemptD1,
   isAdminPasswordConfiguredD1,
+  removeCuttingSheetLinkD1,
   resetPlanningWorkspaceD1,
   restoreWorkspaceSnapshotD1,
   savePendingOtpD1,
@@ -2155,6 +2158,44 @@ export async function handleWorkerFetch(
     }
   }
 
+  if (method === 'POST' && path === '/api/cutting-sheet/links/remove') {
+    const denied = await requireAdminWorker(request, env);
+    if (denied) return denied;
+    try {
+      const parsedBody = await readJsonBody(request);
+      if (!parsedBody.ok) {
+        return jsonResponse(request, env, { error: parsedBody.error }, parsedBody.status);
+      }
+      const body = parsedBody.data as { role?: string; scope?: string };
+      const role = body.role;
+      const scope = body.scope;
+      if (role !== 'cutting' && role !== 'output' && role !== 'packing') {
+        return jsonResponse(
+          request,
+          env,
+          { error: 'Invalid link role. Expected cutting, output, or packing.' },
+          400
+        );
+      }
+      if (scope !== 'combined' && !ALLOWED_FACTORIES.includes(scope as FactoryName)) {
+        return jsonResponse(request, env, { error: 'Invalid link scope.' }, 400);
+      }
+      const cuttingSheetSync = await removeCuttingSheetLinkD1(env, {
+        role: role as CuttingSheetLinkRole,
+        scope: scope as CuttingSheetLinkScope,
+      });
+      return jsonResponse(request, env, { ok: true, cuttingSheetSync });
+    } catch (error) {
+      console.error('POST /api/cutting-sheet/links/remove error:', error);
+      return jsonResponse(
+        request,
+        env,
+        { error: toSafeClientErrorWorker(error, 'Failed to remove saved sheet link.') },
+        400
+      );
+    }
+  }
+
   if (method === 'POST' && path === '/api/cutting-sheet/sync') {
     const limited = await enforceRateLimit(request, env, {
       name: 'api-upload-sync',
@@ -2168,7 +2209,22 @@ export async function handleWorkerFetch(
     if (denied) return denied;
 
     try {
-      const result = await runCuttingSheetSyncWorker(env, { trigger: 'Manual', force: true });
+      let trigger: 'Auto' | 'Manual' = 'Manual';
+      let force = true;
+      const contentType = (request.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('application/json')) {
+        const parsedBody = await readJsonBody(request);
+        if (parsedBody.ok && parsedBody.data && typeof parsedBody.data === 'object') {
+          const b = parsedBody.data as { trigger?: string; force?: boolean };
+          if (b.trigger === 'Auto') {
+            trigger = 'Auto';
+            force = typeof b.force === 'boolean' ? b.force : false;
+          } else if (typeof b.force === 'boolean') {
+            force = b.force;
+          }
+        }
+      }
+      const result = await runCuttingSheetSyncWorker(env, { trigger, force });
       return jsonResponse(request, env, {
         ok: result.ok,
         updated: result.updated,
