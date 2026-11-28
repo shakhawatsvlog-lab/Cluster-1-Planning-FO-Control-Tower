@@ -29,6 +29,10 @@ import {
   PublicMasterPlanTabs,
   type PublicMasterPlanTab,
 } from './PublicMasterPlanTabs.tsx';
+import {
+  ShehreenAssistant,
+  type ShehreenAction,
+} from './ShehreenAssistant.tsx';
 import { SiteFooter } from './SiteFooter.tsx';
 import { usePWAInstall } from '../hooks/usePWAInstall.ts';
 import { apiUrl } from '../lib/apiBase.ts';
@@ -120,6 +124,7 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
   const [selectedLine, setSelectedLine] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<PublicProductionStatusFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [shehreenOpen, setShehreenOpen] = useState(false);
   const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilterValue>({
     field: 'endDateIso',
     fromIso: '',
@@ -706,6 +711,39 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
     setDateRangeFilter((prev) => ({ ...prev, fromIso: '', toIso: '' }));
   };
 
+  const handleApplyShehreenAction = useCallback(
+    (action: ShehreenAction) => {
+      if (action.navigateTab === 'master_plan' || action.navigateTab === 'fo_needed') {
+        setActiveTab(action.navigateTab);
+        if (action.navigateTab === 'fo_needed' && !wakeupActive && !foNeededData) {
+          void fetchPublicFoNeeded(false);
+        }
+      } else if (action.filterFactory || action.filterLine || action.searchQuery) {
+        setActiveTab('master_plan');
+      }
+
+      if (
+        action.filterFactory &&
+        action.filterFactory !== 'ALL' &&
+        action.filterFactory !== selectedFactoryRef.current
+      ) {
+        const targetFactory = action.filterFactory;
+        setSelectedFactory(targetFactory);
+        selectedFactoryRef.current = targetFactory;
+        setSelectedLine(action.filterLine || 'ALL');
+        syncFactoryQueryParam(targetFactory);
+        void fetchFactoryMasterPlan(targetFactory, 'switch');
+      } else if (action.filterLine) {
+        setSelectedLine(action.filterLine);
+      }
+
+      if (typeof action.searchQuery === 'string' && action.searchQuery.trim()) {
+        setSearchQuery(action.searchQuery.trim());
+      }
+    },
+    [fetchFactoryMasterPlan, fetchPublicFoNeeded, foNeededData, wakeupActive]
+  );
+
   return (
     <div className="app-shell-height flex flex-col robotics-workspace-bg text-slate-900">
       {splashPhase !== 'done' && (
@@ -914,6 +952,16 @@ export function PublicMasterPlanPage({ onBackToPortal }: PublicMasterPlanPagePro
             · Smart Live Sync (15s)
           </span>
         }
+      />
+
+      <ShehreenAssistant
+        open={shehreenOpen}
+        onToggleOpen={setShehreenOpen}
+        mode="master_plan"
+        currentTab={activeTab}
+        selectedFactory={selectedFactory ?? 'ALL'}
+        selectedLine={selectedLine}
+        onApplyAction={handleApplyShehreenAction}
       />
     </div>
   );

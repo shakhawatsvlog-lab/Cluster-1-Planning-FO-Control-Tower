@@ -2604,8 +2604,7 @@ export async function handleWorkerFetch(
     });
     if (limited) return limited;
 
-    const denied = await requireAdminWorker(request, env);
-    if (denied) return denied;
+    const isAdmin = await isAdminAuthorizedWorker(request, env);
 
     try {
       const parsedBody = await readJsonBody(request);
@@ -2615,6 +2614,7 @@ export async function handleWorkerFetch(
       const body = parsedBody.data as {
         message?: string;
         history?: ShehreenHistoryTurn[];
+        scope?: string;
         currentTab?: string;
         selectedFactory?: string;
         selectedLine?: string;
@@ -2628,12 +2628,15 @@ export async function handleWorkerFetch(
           400
         );
       }
+      const effectiveScope =
+        isAdmin && body?.scope === 'control_tower' ? 'control_tower' : 'master_plan';
       const state = await getWorkspaceStateD1(env);
       const smtpStatus = await getWorkerSmtpStatus(env);
       const result = await askShehreenAssistantCore(
         {
           message: rawMessage.slice(0, 4000),
           history: Array.isArray(body?.history) ? body.history.slice(-12) : [],
+          scope: effectiveScope,
           currentTab: typeof body?.currentTab === 'string' ? body.currentTab : undefined,
           selectedFactory:
             typeof body?.selectedFactory === 'string' ? body.selectedFactory : undefined,
@@ -2644,6 +2647,7 @@ export async function handleWorkerFetch(
           geminiApiKey: env.GEMINI_API_KEY || '',
           state,
           smtpConfigured: smtpStatus.configured,
+          scope: effectiveScope,
         }
       );
       return jsonResponse(request, env, { ok: true, ...result });

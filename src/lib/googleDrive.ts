@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'firebase/app';
-import type { User } from 'firebase/auth';
+import type { Auth, User } from 'firebase/auth';
 import {
   GoogleAuthProvider,
   getAuth,
@@ -7,22 +7,70 @@ import {
   signInWithPopup,
   signOut,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
 
 const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const BACKUP_FOLDER_NAME = 'Alex Apparels Planning Backups';
 
-const app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
-const auth = getAuth(app);
+function readFirebaseEnvConfig(): {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  storageBucket: string;
+  messagingSenderId: string;
+  appId: string;
+} | null {
+  const env = (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : {}) as Record<
+    string,
+    string | undefined
+  >;
+  const apiKey = (env.VITE_FIREBASE_API_KEY || '').trim();
+  const projectId = (env.VITE_FIREBASE_PROJECT_ID || '').trim();
+  const appId = (env.VITE_FIREBASE_APP_ID || '').trim();
+  if (!apiKey || !projectId || !appId) {
+    return null;
+  }
+  return {
+    apiKey,
+    authDomain: (env.VITE_FIREBASE_AUTH_DOMAIN || `${projectId}.firebaseapp.com`).trim(),
+    projectId,
+    storageBucket: (env.VITE_FIREBASE_STORAGE_BUCKET || `${projectId}.firebasestorage.app`).trim(),
+    messagingSenderId: (env.VITE_FIREBASE_MESSAGING_SENDER_ID || '').trim(),
+    appId,
+  };
+}
+
+let cachedAuth: Auth | null | undefined;
+
+function getFirebaseAuthInstance(): Auth | null {
+  if (cachedAuth !== undefined) {
+    return cachedAuth;
+  }
+  const config = readFirebaseEnvConfig();
+  if (!config) {
+    cachedAuth = null;
+    return null;
+  }
+  try {
+    const app = getApps().length > 0 ? getApps()[0] : initializeApp(config);
+    cachedAuth = getAuth(app);
+    onAuthStateChanged(cachedAuth, (user) => {
+      if (!user) {
+        memoryAccessToken = null;
+      }
+    });
+    return cachedAuth;
+  } catch {
+    cachedAuth = null;
+    return null;
+  }
+}
+
+export function isGoogleDriveBackupConfigured(): boolean {
+  return readFirebaseEnvConfig() !== null;
+}
 
 // In-memory OAuth access token cache ONLY (never localStorage or sessionStorage)
 let memoryAccessToken: string | null = null;
-
-onAuthStateChanged(auth, (user) => {
-  if (!user) {
-    memoryAccessToken = null;
-  }
-});
 
 export interface DriveFileItem {
   id: string;
@@ -34,7 +82,8 @@ export interface DriveFileItem {
 }
 
 export function getCurrentGoogleUser(): User | null {
-  return auth.currentUser;
+  const auth = getFirebaseAuthInstance();
+  return auth ? auth.currentUser : null;
 }
 
 export function hasInMemoryDriveToken(): boolean {
@@ -42,6 +91,11 @@ export function hasInMemoryDriveToken(): boolean {
 }
 
 export function subscribeGoogleAuth(cb: (user: User | null) => void): () => void {
+  const auth = getFirebaseAuthInstance();
+  if (!auth) {
+    cb(null);
+    return () => {};
+  }
   return onAuthStateChanged(auth, (user) => {
     if (!user) {
       memoryAccessToken = null;
@@ -54,6 +108,12 @@ export async function signInWithGoogleDrive(): Promise<{
   user: User;
   accessToken: string;
 }> {
+  const auth = getFirebaseAuthInstance();
+  if (!auth) {
+    throw new Error(
+      'Google Drive Cloud Backup is disabled (no Firebase client config). Please use "Download JSON Backup" or "Download .xlsx Dashboard" instead.'
+    );
+  }
   const provider = new GoogleAuthProvider();
   provider.addScope(DRIVE_FILE_SCOPE);
   provider.setCustomParameters({ prompt: 'select_account' });
@@ -70,11 +130,15 @@ export async function signInWithGoogleDrive(): Promise<{
 
 export async function signOutGoogleDrive(): Promise<void> {
   memoryAccessToken = null;
-  await signOut(auth);
+  const auth = getFirebaseAuthInstance();
+  if (auth) {
+    await signOut(auth);
+  }
 }
 
 async function ensureAccessToken(): Promise<string> {
-  if (memoryAccessToken && auth.currentUser) {
+  const auth = getFirebaseAuthInstance();
+  if (memoryAccessToken && auth?.currentUser) {
     return memoryAccessToken;
   }
   const { accessToken } = await signInWithGoogleDrive();

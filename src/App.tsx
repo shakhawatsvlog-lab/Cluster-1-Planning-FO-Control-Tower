@@ -2519,7 +2519,11 @@ export default function App() {
   }, [evaluatedAll, shortcutSummaries, referenceDateIso, cuttingEntries.length, reminders.recipients]);
 
   const handleApplyShehreenAction = useCallback((action: ShehreenAction) => {
-    if (action.navigateTab) {
+    if (
+      action.navigateTab &&
+      action.navigateTab !== 'master_plan' &&
+      action.navigateTab !== 'fo_needed'
+    ) {
       setActiveTab(action.navigateTab);
     }
     if (action.filterFactory) {
@@ -3045,6 +3049,7 @@ export default function App() {
       <ShehreenAssistant
         open={shehreenOpen}
         onToggleOpen={setShehreenOpen}
+        mode="control_tower"
         currentTab={activeTab}
         selectedFactory={selectedFactory}
         selectedLine={selectedLine}

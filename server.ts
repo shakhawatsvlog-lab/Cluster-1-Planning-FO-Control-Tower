@@ -2052,11 +2052,11 @@ async function startServer() {
   });
 
   app.post('/api/assistant/chat', assistantLimiter, async (req, res) => {
-    if (!requireAdmin(req, res)) return;
     try {
       const body = req.body as {
         message?: string;
         history?: ShehreenHistoryTurn[];
+        scope?: string;
         currentTab?: string;
         selectedFactory?: string;
         selectedLine?: string;
@@ -2068,10 +2068,14 @@ async function startServer() {
         return;
       }
       const message = rawMessage.slice(0, 4000);
+      const isAdmin = isAdminAuthorized(req);
+      const effectiveScope =
+        isAdmin && body?.scope === 'control_tower' ? 'control_tower' : 'master_plan';
 
       const result = await askShehreenAssistant({
         message,
         history: Array.isArray(body?.history) ? body.history.slice(-12) : [],
+        scope: effectiveScope,
         currentTab: typeof body?.currentTab === 'string' ? body.currentTab : undefined,
         selectedFactory:
           typeof body?.selectedFactory === 'string' ? body.selectedFactory : undefined,

@@ -3,16 +3,22 @@ import { getWorkspaceState } from './workspaceStore.ts';
 import {
   askShehreenAssistantCore,
   type AssistantNavTab,
+  type AssistantScope,
+  type MasterPlanNavTab,
   type ShehreenChatRequest,
   type ShehreenChatResponse,
   type ShehreenHistoryTurn,
+  type ShehreenNavTab,
 } from './shehreenCore.ts';
 
 export type {
   AssistantNavTab,
+  AssistantScope,
+  MasterPlanNavTab,
   ShehreenChatRequest,
   ShehreenChatResponse,
   ShehreenHistoryTurn,
+  ShehreenNavTab,
 };
 
 const isAiEnabled = (): boolean =>
@@ -26,5 +32,6 @@ export async function askShehreenAssistant(
     geminiApiKey: (process.env.GEMINI_API_KEY || '').trim(),
     state: getWorkspaceState(),
     smtpConfigured: getSmtpStatus().configured,
+    scope: req.scope,
   });
 }

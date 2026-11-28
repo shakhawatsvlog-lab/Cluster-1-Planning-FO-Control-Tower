@@ -5,6 +5,7 @@ import {
   Bot,
   Check,
   Copy,
+  Globe,
   Loader2,
   RotateCcw,
   Send,
@@ -16,8 +17,11 @@ import type { NavTab } from './Sidebar.tsx';
 import { apiUrl } from '../lib/apiBase.ts';
 import { buildAdminHeaders } from '../lib/adminSession.ts';
 
+export type ShehreenMode = 'control_tower' | 'master_plan';
+export type ShehreenTargetTab = NavTab | 'master_plan' | 'fo_needed';
+
 export interface ShehreenAction {
-  navigateTab?: NavTab | '';
+  navigateTab?: ShehreenTargetTab | '';
   filterFactory?: FactoryName | 'ALL' | '';
   filterLine?: string;
   searchQuery?: string;
@@ -36,16 +40,40 @@ interface ChatMessage {
 interface ShehreenAssistantProps {
   open: boolean;
   onToggleOpen: (open: boolean) => void;
-  currentTab: NavTab;
+  mode?: ShehreenMode;
+  currentTab: string;
   selectedFactory: FactoryName | 'ALL';
   selectedLine: string;
   onApplyAction: (action: ShehreenAction) => void;
 }
 
-const STARTER_PROMPTS = [
+const MASTER_PLAN_STARTER_PROMPTS = [
+  {
+    label: 'FO Needed Today',
+    prompt: 'Which Running and immediate Upcoming PGs currently need FO?',
+  },
+  {
+    label: 'Cutting & Output',
+    prompt: 'Show the current Cutting Qty, Output Qty, and Packing Qty summary by factory.',
+  },
+  {
+    label: 'Output Start Dates',
+    prompt: 'Which lines have upcoming style changes soon, and when does Output Start begin?',
+  },
+  {
+    label: 'Excel Formula',
+    prompt: 'How do I calculate PG-wise total cutting qty in Excel using SUMIFS?',
+  },
+  {
+    label: 'Any Language',
+    prompt: 'Can you summarize ALEX 1 current running styles in Bengali?',
+  },
+];
+
+const CONTROL_TOWER_STARTER_PROMPTS = [
   {
     label: 'Recent FO Needed',
-    prompt: 'Kon kon recent Running ar immediate Upcoming PG gulote ekhon FO lagbe?',
+    prompt: 'Which recent Running and immediate Upcoming PGs need FO right now?',
   },
   {
     label: 'Draft FO Email',
@@ -53,17 +81,23 @@ const STARTER_PROMPTS = [
   },
   {
     label: 'Excel Formula Help',
-    prompt: 'Excel-e SUMIFS formula diye PG-wise total cutting qty kibhabe ber korbo?',
+    prompt: 'How do I calculate PG-wise total cutting qty in Excel using SUMIFS?',
   },
   {
     label: 'Output & Issue Qty',
-    prompt: 'Factory-wise Issue Qty koto ebong kon line e new style output kobe start hobe?',
+    prompt: 'What is the factory-wise Issue Qty, and when does new style output start on each line?',
   },
   {
-    label: 'Team Chat / Friendly Help',
-    prompt: 'Hey Shehreen! Ajke team er kaj easy korar jonno 3 ta quick productivity tip daw.',
+    label: 'Team Productivity',
+    prompt: 'Share 3 quick practical tips to speed up our daily garments planning workflow.',
   },
 ];
+
+const DEFAULT_WELCOME_TEXT =
+  "Hello! I'm **SHEHREEN**, your smart AI teammate for Alex Apparels.\n\nAsk me anything in **English** (default) — live Master Plan & FO data, Cutting/Output/Packing summaries, buyer email drafts, Excel formulas, or garment math. You can also write in **Bengali, Banglish, Hindi, Urdu, Arabic, or any language**, and I'll reply fluently in that language!";
+
+const DEFAULT_RESET_TEXT =
+  'Fresh chat ready! Ask me anything in English or any other language — live Master Plan data, FO status, Excel formulas, garment calculations, or email drafts.';
 
 function formatInlineSegments(line: string, keyPrefix: string): ReactNode[] {
   const tokens = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
@@ -113,6 +147,7 @@ function renderFormattedReply(text: string, isUser: boolean): ReactNode {
 export function ShehreenAssistant({
   open,
   onToggleOpen,
+  mode = 'control_tower',
   currentTab,
   selectedFactory,
   selectedLine,
@@ -122,8 +157,7 @@ export function ShehreenAssistant({
     {
       id: 'welcome-shehreen',
       role: 'model',
-      text:
-        'Assalamu Alaikum! Ami **SHEHREEN**, apnar team-er friend & smart AI teammate.\n\nAmake je kono kichu jiggesh korte paren — email draft, Excel formula, garment/IE math, translation, casual team chat, ba live PG/FO/Output Start/Cutting data. English, বাংলা, ba Banglish-e likhun!',
+      text: DEFAULT_WELCOME_TEXT,
     },
   ]);
   const [input, setInput] = useState('');
@@ -132,6 +166,9 @@ export function ShehreenAssistant({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const starterPrompts =
+    mode === 'master_plan' ? MASTER_PLAN_STARTER_PROMPTS : CONTROL_TOWER_STARTER_PROMPTS;
 
   useEffect(() => {
     if (open) {
@@ -168,14 +205,18 @@ export function ShehreenAssistant({
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 45_000);
 
+      const isPublicMasterPlan = mode === 'master_plan';
       const res = await fetch(apiUrl('/api/assistant/chat'), {
         method: 'POST',
-        credentials: 'include',
-        headers: buildAdminHeaders(true),
+        ...(isPublicMasterPlan ? {} : { credentials: 'include' as const }),
+        headers: isPublicMasterPlan
+          ? { 'Content-Type': 'application/json' }
+          : buildAdminHeaders(true),
         signal: controller.signal,
         body: JSON.stringify({
           message: trimmed,
           history: historyPayload,
+          scope: mode,
           currentTab,
           selectedFactory,
           selectedLine,
@@ -187,7 +228,7 @@ export function ShehreenAssistant({
       let data: {
         ok?: boolean;
         reply?: string;
-        navigateTab?: NavTab | '';
+        navigateTab?: ShehreenTargetTab | '';
         filterFactory?: FactoryName | 'ALL' | '';
         filterLine?: string;
         searchQuery?: string;
@@ -269,8 +310,7 @@ export function ShehreenAssistant({
       {
         id: 'welcome-shehreen',
         role: 'model',
-        text:
-          'Fresh chat ready! Ami **SHEHREEN** — team chat, buyer email draft, Excel formula, garment math, ba live PG/FO/Output Start sob kichute ami help korte pari!',
+        text: DEFAULT_RESET_TEXT,
       },
     ]);
   };
@@ -290,7 +330,7 @@ export function ShehreenAssistant({
           <span className="text-left">
             <span className="block text-xs font-bold tracking-wide leading-none">SHEHREEN AI</span>
             <span className="block text-[10px] text-cyan-200/85 mt-1 leading-none">
-              Team Friend · Ask Anything
+              Ask Anything · All Languages
             </span>
           </span>
         </button>
@@ -312,12 +352,15 @@ export function ShehreenAssistant({
                   <h2 className="font-display text-sm font-bold tracking-wide truncate">
                     SHEHREEN
                   </h2>
-                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">
-                    AI Friend
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold inline-flex items-center gap-1">
+                    <Globe className="w-2.5 h-2.5" />
+                    <span>EN Default · All Langs</span>
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-300 truncate">
-                  Team Friend · Work Helper · Live Planning &amp; FO
+                  {mode === 'master_plan'
+                    ? 'Master Plan AI · Live Planning & FO Helper'
+                    : 'Team Assistant · Live Planning, FO & Work Helper'}
                 </p>
               </div>
             </div>
@@ -344,7 +387,7 @@ export function ShehreenAssistant({
 
           {/* Starter Prompt Chips */}
           <div className="px-3 py-2 bg-slate-50/90 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto shrink-0">
-            {STARTER_PROMPTS.map((item) => (
+            {starterPrompts.map((item) => (
               <button
                 key={item.label}
                 type="button"
@@ -432,7 +475,7 @@ export function ShehreenAssistant({
               <div className="flex items-start">
                 <div className="px-3.5 py-2.5 rounded-2xl rounded-bl-sm bg-white border border-slate-200 text-xs text-slate-600 inline-flex items-center gap-2 shadow-sm">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                  <span>Shehreen reply likhche...</span>
+                  <span>Shehreen is writing a reply...</span>
                 </div>
               </div>
             )}
@@ -457,7 +500,7 @@ export function ShehreenAssistant({
                   void sendMessage(input);
                 }
               }}
-              placeholder="Ask anything — email draft, Excel formula, PG/FO, or chat with Shehreen..."
+              placeholder="Ask in English or any language (Bengali, Hindi, Arabic, etc.)..."
               disabled={sending}
               className="flex-1 px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-cyan-600 focus:outline-none text-xs text-slate-900 resize-none leading-snug"
             />
