@@ -22,7 +22,7 @@ database_id = "0eda3ccd-7a4a-4994-b338-5a6dfac5ea87"
 NODE_ENV = "production"
 APP_URL = "https://shakhawatsvlog-lab.github.io/Cluster-1-Planning-FO-Control-Tower"
 ALLOWED_ORIGINS = "https://shakhawatsvlog-lab.github.io"
-AI_ENABLED = "false"
+AI_ENABLED = "true"
 EMAIL_ENABLED = "false"
 EMAIL_FROM = "Alex Apparels Planning <noreply@alexapparels.com>"
 
